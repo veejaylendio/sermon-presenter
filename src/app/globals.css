@@ -1,74 +1,53 @@
 :root {
-  /* Fonts */
+  /* Fonts — one bold, tight-tracked grotesque sans for the whole app chrome.
+     --font-serif is kept as an alias (rather than hunting down every call
+     site) so existing var(--font-serif) usages fall in line automatically. */
   --font-sans: var(--font-outfit), system-ui, sans-serif;
-  --font-serif: var(--font-playfair), Georgia, serif;
+  --font-serif: var(--font-outfit), system-ui, sans-serif;
 
-  /* Color Palette (Deep, premium dark theme by default, with rich accents) */
-  --bg-base: #09090b;
-  --bg-surface: rgba(24, 24, 27, 0.7);
-  --bg-surface-solid: #18181b;
-  --bg-surface-hover: rgba(39, 39, 42, 0.8);
-  
-  --border-color: rgba(63, 63, 70, 0.4);
-  --border-color-hover: rgba(161, 161, 170, 0.4);
-  
-  --text-primary: #f4f4f5;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
-  
-  /* Primary & Accent (Indigo and Warm Amber/Gold) */
-  --primary: #6366f1;
-  --primary-hover: #4f46e5;
-  --primary-glow: rgba(99, 102, 241, 0.15);
-  
-  --accent: #f59e0b;
-  --accent-hover: #d97706;
-  --accent-glow: rgba(245, 158, 11, 0.15);
-  
-  --success: #10b981;
-  --danger: #ef4444;
-  --info: #06b6d4;
+  /* Color Palette — flat white background, near-black text/ink, no glass. */
+  --bg-base: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-surface-solid: #ffffff;
+  --bg-surface-hover: #f4f4f5;
+
+  --border-color: #e4e4e7;
+  --border-color-hover: #d4d4d8;
+
+  --text-primary: #0a0a0a;
+  --text-secondary: #52525b;
+  --text-muted: #a1a1aa;
+
+  /* Primary is the flat ink accent (black), matching the monochrome rail/
+     active-tab/checkbox treatment. Amber stays as the one semantic accent
+     for in-progress/attention states. */
+  --primary: #0a0a0a;
+  --primary-hover: #262626;
+  --primary-glow: rgba(10, 10, 10, 0.06);
+
+  --accent: #b45309;
+  --accent-hover: #92400e;
+  --accent-glow: rgba(180, 83, 9, 0.1);
+
+  --success: #15803d;
+  --danger: #dc2626;
+  --info: #0369a1;
 
   /* Transitions */
   --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  
+
   /* Radius */
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 18px;
   --radius-full: 9999px;
 
-  /* Shadow & Blur */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-  --glass-blur: 16px;
-}
-
-/* Light Mode Overrides (if prefers-color-scheme is light, but let's default to dark for premium slides app, and support light mode elegantly) */
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg-base: #f8fafc;
-    --bg-surface: rgba(255, 255, 255, 0.85);
-    --bg-surface-solid: #ffffff;
-    --bg-surface-hover: rgba(241, 245, 249, 0.9);
-    
-    --border-color: rgba(226, 232, 240, 0.8);
-    --border-color-hover: rgba(203, 213, 225, 1);
-    
-    --text-primary: #0f172a;
-    --text-secondary: #475569;
-    --text-muted: #94a3b8;
-    
-    --primary: #4f46e5;
-    --primary-hover: #3730a3;
-    --primary-glow: rgba(79, 70, 229, 0.1);
-    
-    --primary-glow: rgba(79, 70, 229, 0.08);
-    --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.05), 0 4px 6px -2px rgba(15, 23, 42, 0.02);
-  }
+  /* Shadow — hairline + very soft, no glow (flat design has no blur/glass) */
+  --shadow-sm: 0 1px 2px 0 rgba(10, 10, 10, 0.04);
+  --shadow-md: 0 1px 3px rgba(10, 10, 10, 0.06), 0 4px 8px -4px rgba(10, 10, 10, 0.08);
+  --shadow-lg: 0 1px 2px rgba(10, 10, 10, 0.04), 0 12px 28px -12px rgba(10, 10, 10, 0.14);
 }
 
 /* Global Reset & Base styles */
@@ -85,7 +64,7 @@ body {
   width: 100%;
   height: 100%;
   overflow-x: hidden;
-  color-scheme: dark light;
+  color-scheme: light;
 }
 
 body {
@@ -94,10 +73,6 @@ body {
   flex-direction: column;
   color: var(--text-primary);
   background-color: var(--bg-base);
-  background-image: 
-    radial-gradient(at 0% 0%, var(--primary-glow) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, var(--accent-glow) 0px, transparent 50%);
-  background-attachment: fixed;
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -137,30 +112,27 @@ a {
   transition: var(--transition-fast);
 }
 
-/* Glassmorphism Styles */
+/* Flat surface styles (kept the .glass/.glass-card class names so every
+   call site keeps working — only the look changed, from blurred glass to a
+   flat card: solid white, hairline border, soft shadow, no blur). */
 .glass {
   background: var(--bg-surface);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .glass-card {
   background: var(--bg-surface);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   padding: 2rem;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-sm);
   transition: var(--transition-normal);
 }
 
 .glass-card:hover {
   border-color: var(--border-color-hover);
-  transform: translateY(-2px);
-  box-shadow: 0 12px 20px -5px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
 }
 
 /* Inputs & Forms */
@@ -181,7 +153,7 @@ a {
   padding: 0.75rem 1rem;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--bg-surface-hover);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 1rem;
@@ -190,7 +162,7 @@ a {
 
 .input-field:focus {
   border-color: var(--primary);
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--bg-surface-solid);
   box-shadow: 0 0 0 3px var(--primary-glow);
 }
 
@@ -230,13 +202,13 @@ a {
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-surface-hover);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
 }
 
 .btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--border-color);
   border-color: var(--border-color-hover);
 }
 
@@ -328,6 +300,21 @@ a {
   color: #ffffff;
 }
 
+/* .presenter-control-btn-secondary is shared with the always-dark
+   .presenter-dock above (white-on-dark there); inside the light
+   .editor-toolbar ("Change Style") it needs the opposite treatment. */
+.editor-toolbar .presenter-control-btn-secondary {
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.editor-toolbar .presenter-control-btn-secondary:hover:not(:disabled) {
+  background: var(--border-color);
+  border-color: var(--border-color-hover);
+  color: var(--text-primary);
+}
+
 .presenter-control-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -343,16 +330,21 @@ a {
   white-space: nowrap;
 }
 
+/* Hardcoded (not var(--primary)) on purpose: this dock always sits on a
+   near-black control-room surface regardless of the app's own light/dark
+   theme, so its accent button needs to stay a bright, self-contained color
+   rather than following --primary (which is now near-black for the flat
+   app chrome, and would be invisible here). */
 .presenter-control-btn-primary {
-  background: var(--primary);
-  border: 1px solid var(--primary);
+  background: #6366f1;
+  border: 1px solid #6366f1;
   color: #ffffff;
-  box-shadow: 0 4px 12px var(--primary-glow);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.35);
 }
 
 .presenter-control-btn-primary:hover:not(:disabled) {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
+  background: #4f46e5;
+  border-color: #4f46e5;
   color: #ffffff;
 }
 
@@ -372,12 +364,10 @@ a {
   gap: 0.5rem;
   padding: 0.5rem 1.25rem;
   background: var(--bg-surface);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
   border-bottom: 1px solid var(--border-color);
   min-height: 52px;
   flex: none;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .editor-toolbar-group {
@@ -438,13 +428,13 @@ a {
 }
 
 .editor-icon-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-surface-hover);
   color: var(--text-primary);
 }
 
 .editor-icon-btn.is-active {
   background: var(--primary-glow);
-  border-color: rgba(99, 102, 241, 0.4);
+  border-color: var(--border-color-hover);
   color: var(--primary);
 }
 
@@ -475,7 +465,7 @@ a {
   padding: 0.35rem 0.5rem;
   border-radius: 6px;
   border: 1px solid var(--border-color);
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--bg-surface-hover);
   color: var(--text-primary);
   max-width: 132px;
 }
@@ -487,7 +477,7 @@ a {
   padding: 0.35rem 0.4rem;
   border-radius: 6px;
   border: 1px solid var(--border-color);
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--bg-surface-hover);
   color: var(--text-primary);
   text-align: center;
 }
@@ -510,7 +500,7 @@ a {
   font-weight: 700;
   border-radius: 6px;
   border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-surface-hover);
   color: var(--text-primary);
   cursor: pointer;
   display: flex;
@@ -548,7 +538,7 @@ a {
 
 .editor-save-status {
   font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--text-muted);
   padding: 0 0.4rem;
   user-select: none;
   white-space: nowrap;
@@ -679,7 +669,8 @@ a {
 }
 
 .pc-thumb.is-active {
-  border-color: var(--primary);
+  /* Hardcoded, not var(--primary) — see note above .presenter-control-btn-primary. */
+  border-color: #6366f1;
 }
 
 .pc-thumb iframe {
@@ -687,5 +678,114 @@ a {
   height: 100%;
   border: none;
   pointer-events: none;
+}
+
+/* App Shell — icon rail + topbar wrapping /sermons, /themes, /settings.
+   Flat white/black, no blur, matching the rest of this restyle. */
+.shell-root {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 76px 1fr;
+}
+
+.shell-rail {
+  background: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.25rem 0;
+  gap: 0.5rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.shell-rail-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1.75rem;
+  flex-shrink: 0;
+}
+
+.shell-rail-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(245, 245, 245, 0.55);
+  flex-shrink: 0;
+}
+
+.shell-rail-icon:hover {
+  color: rgba(245, 245, 245, 0.85);
+}
+
+.shell-rail-icon.is-active {
+  background: rgba(245, 245, 245, 0.14);
+  color: #f5f5f5;
+}
+
+.shell-rail-spacer {
+  flex: 1;
+}
+
+.shell-rail-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(245, 245, 245, 0.14);
+  color: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.shell-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 2rem;
+  border-bottom: 1px solid var(--border-color);
+  flex: none;
+}
+
+.shell-brand {
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.shell-content {
+  flex: 1;
+  padding: 2rem;
+}
+
+@media (max-width: 760px) {
+  .shell-root { grid-template-columns: 1fr; }
+  .shell-rail {
+    flex-direction: row;
+    height: auto;
+    position: static;
+    padding: 0.65rem 1rem;
+  }
+  .shell-rail-mark { margin-bottom: 0; margin-right: auto; }
+  .shell-rail-spacer { display: none; }
 }
 

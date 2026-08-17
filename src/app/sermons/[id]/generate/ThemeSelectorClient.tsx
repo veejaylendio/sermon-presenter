@@ -20,7 +20,8 @@ function PreviewFrame({ html, title }: { html: string; title: string }) {
     return (
       <div style={{
         position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', padding: '1.5rem', textAlign: 'center'
+        alignItems: 'center', justifyContent: 'center', padding: '1.5rem', textAlign: 'center',
+        color: '#f4f4f5', // this canvas is a fixed dark placeholder (see rgba(0,0,0,0.5) at call sites), not app chrome
       }}>
         <span style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>🎨</span>
         <strong style={{ fontSize: '1.05rem' }}>{title}</strong>
@@ -50,7 +51,7 @@ function Chip({ children, tone = 'muted' }: { children: React.ReactNode; tone?: 
       letterSpacing: '0.03em',
       padding: '0.25rem 0.7rem',
       borderRadius: '999px',
-      background: tone === 'accent' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255,255,255,0.07)',
+      background: tone === 'accent' ? 'rgba(245, 158, 11, 0.15)' : 'var(--bg-surface-hover)',
       color: tone === 'accent' ? 'var(--accent)' : 'var(--text-secondary)',
       border: `1px solid ${tone === 'accent' ? 'rgba(245,158,11,0.35)' : 'var(--border-color)'}`,
       whiteSpace: 'nowrap',
@@ -249,7 +250,8 @@ export default function ThemeSelectorClient({
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
             <span style={{
               width: '26px', height: '26px', borderRadius: '50%', flexShrink: 0,
-              background: isAiSelected ? 'var(--accent)' : 'rgba(255,255,255,0.12)',
+              background: isAiSelected ? 'var(--accent)' : 'var(--bg-surface-hover)',
+              border: isAiSelected ? 'none' : '1px solid var(--border-color)',
               color: '#fff', display: 'flex', alignItems: 'center',
               justifyContent: 'center', fontSize: '0.8rem', fontWeight: 'bold'
             }}>

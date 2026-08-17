@@ -64,3 +64,26 @@ export async function signOut() {
   revalidatePath('/', 'layout')
   return redirect('/login')
 }
+
+export async function updateProfile(formData: FormData) {
+  const supabase = await createClient()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return redirect('/login')
+  }
+
+  const fullName = (formData.get('fullName') as string || '').trim()
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ full_name: fullName })
+    .eq('id', user.id)
+
+  if (error) {
+    return redirect(`/settings?error=${encodeURIComponent(error.message)}`)
+  }
+
+  revalidatePath('/', 'layout')
+  return redirect('/settings?saved=1')
+}

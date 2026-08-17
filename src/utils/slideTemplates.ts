@@ -2371,6 +2371,13 @@ HistoryManager.prototype.apply = function (entry, inverse) {
         }
     } else if (entry.kind === 'text-style') {
         window.editorController.restoreTextStyleSnapshot(entry.slideId, entry.field, inverse ? entry.before : entry.after);
+    } else if (entry.kind === 'text-structural') {
+        var doAttachText = inverse ? entry.op === 'delete' : entry.op === 'add';
+        if (doAttachText) {
+            window.editorController.attachTextElement(entry);
+        } else {
+            window.editorController.detachTextElement(entry);
+        }
     }
 };
 
@@ -2851,6 +2858,27 @@ WidgetManager.prototype.addWidget = function (type) {
     this.closePopover();
     window.historyManager.push({ kind: 'widget-structural', op: 'add', widget: widget, slideId: slide.id, listPosition: list.length - 1, nextSibling: null });
     this.save();
+};
+
+// Used by InlineEditor.duplicateTextAsWidget to turn a slide's title/body text
+// into an independent text widget - same add-widget flow as addWidget() above,
+// but seeded with the caller's exact fields (text/position/typography) instead
+// of widgetDefaults()'s placeholder text and centered position.
+WidgetManager.prototype.addTextWidgetFrom = function (slideId, fields) {
+    var slideEl = document.querySelector('#deckStage .slide[data-slide-id="' + slideId + '"]');
+    if (!slideEl) return null;
+    var widget = widgetDefaults('text');
+    Object.assign(widget, fields);
+    widget.id = 'w' + (this.nextId++);
+    widget.type = 'text';
+    var list = this.widgetsBySlide[slideId] || (this.widgetsBySlide[slideId] = []);
+    list.push(widget);
+    this.renderWidget(widget, slideEl);
+    this.selectWidget(widget.id);
+    this.closePopover();
+    window.historyManager.push({ kind: 'widget-structural', op: 'add', widget: widget, slideId: slideId, listPosition: list.length - 1, nextSibling: null });
+    this.save();
+    return widget;
 };
 
 // Shared by duplicateWidget, pasteWidget, and SlideManager.duplicateSlide (via
@@ -4133,6 +4161,16 @@ FloatingToolbar.prototype.endContinuous = function () {
 // keyed off click coordinates instead of a target element's bounding rect.
 const CONTEXT_MENU_JS = `
 function ContextMenu() {
+    // A deck saved before buildSaveableHtml() started excluding this element
+    // (see its stale-removal list) can have an old copy of this menu baked
+    // directly into the loaded markup - frozen mid-interaction, with no JS
+    // ever bound to it, so it could never be dismissed (the exact bug that
+    // comment already documents for .floating-toolbar). Strip any such
+    // leftover before creating the real, live one.
+    var staleMenus = document.querySelectorAll('.context-menu');
+    for (var i = 0; i < staleMenus.length; i++) {
+        staleMenus[i].parentNode.removeChild(staleMenus[i]);
+    }
     this.el = document.createElement('div');
     this.el.className = 'context-menu';
     document.body.appendChild(this.el);
@@ -4176,7 +4214,16 @@ ContextMenu.prototype.wireEvents = function () {
         e.preventDefault();
 
         var widgetEl = e.target.closest('.slide-widget');
-        var textEl = e.target.closest('.slide-title, .slide-body');
+        // A right-click can land on the text move/resize handle instead of the
+        // title/body element itself - those handles are positioned siblings of
+        // .slide (see createTextHandles), not descendants of .slide-title/
+        // .slide-body, so closest() alone can't reach the owning element from
+        // there. Fall back to the _textOwner back-reference stashed on the
+        // handle when that happens, so right-clicking the handle still opens
+        // the text element's own menu (Duplicate as Widget / Delete) instead of
+        // misfiring the canvas-background 'slide' menu.
+        var textHandleEl = e.target.closest('.text-move-handle, .text-resize-handle');
+        var textEl = e.target.closest('.slide-title, .slide-body') || (textHandleEl && textHandleEl._textOwner) || null;
         var slideEl = e.target.closest('.slide');
 
         if (widgetEl) {
@@ -4195,6 +4242,17 @@ ContextMenu.prototype.wireEvents = function () {
         } else {
             self.hide();
         }
+    });
+
+    // Dismiss on any ordinary click elsewhere - contextmenu above only ever
+    // fires for right-clicks (opening a new menu, or hiding when the target
+    // is outside #deckStage entirely), so without this a left-click on the
+    // slide, a widget, or anywhere else in the document left the menu sitting
+    // open indefinitely.
+    document.addEventListener('mousedown', function (e) {
+        if (!self.el.classList.contains('open')) return;
+        if (self.contains(e.target)) return;
+        self.hide();
     });
 
     document.addEventListener('keydown', function (e) {
@@ -4254,7 +4312,15 @@ ContextMenu.prototype.getActions = function (kind, ctx) {
         return [
             { label: 'Cut', shortcut: '⌘X', run: function () { document.execCommand('cut'); } },
             { label: 'Copy', shortcut: '⌘C', run: function () { document.execCommand('copy'); } },
-            { label: 'Paste', shortcut: '⌘V', run: function () { document.execCommand('paste'); } }
+            { label: 'Paste', shortcut: '⌘V', run: function () { document.execCommand('paste'); } },
+            'separator',
+            // Unlike widgets, title/body are fixed slots baked into every slide
+            // template, not a freeform list - so "Duplicate" copies the text out
+            // into the widget system (a real, independently movable/deletable
+            // element) rather than creating a second title/body slot that
+            // wouldn't have anywhere to live.
+            { label: 'Duplicate as Widget', run: function () { window.editorController.duplicateTextAsWidget(ctx.el, ctx.slideId, ctx.field); } },
+            { label: 'Delete', danger: true, run: function () { window.editorController.deleteTextElement(ctx.el, ctx.slideId, ctx.field); } }
         ];
     }
     return [];
@@ -4650,7 +4716,7 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
         // reloaded, edited deck doesn't silently start rendering in quirks mode.
         function buildSaveableHtml() {
             var clone = document.documentElement.cloneNode(true);
-            var stale = clone.querySelectorAll('#slideFilmstrip, .floating-toolbar, .text-move-handle, .text-resize-handle, .smart-guides');
+            var stale = clone.querySelectorAll('#slideFilmstrip, .floating-toolbar, .text-move-handle, .text-resize-handle, .smart-guides, .context-menu');
             for (var i = 0; i < stale.length; i++) {
                 stale[i].parentNode.removeChild(stale[i]);
             }
@@ -5101,6 +5167,90 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 }
             }
 
+            // Copies a title/body element's text and rendered style out into the
+            // widget system as an independent, movable/deletable text widget -
+            // see the 'text-structural' comment above deleteTextElement for why
+            // this is "duplicate" for a fixed title/body slot instead of a second
+            // copy of the slot itself. Falls back to the element's computed style
+            // for any field textStyles never overrode (fontFamily/fontSize/
+            // fontWeight/color/align - the only nullable textStyleDefaults()
+            // fields), so an unstyled title still duplicates looking like itself.
+            duplicateTextAsWidget(el, slideId, field) {
+                if (!el || !window.widgetManager) return;
+                const slide = el.closest('.slide');
+                if (!slide) return;
+                const scale = window.widgetManager.getStageScale();
+                const slideRect = slide.getBoundingClientRect();
+                const rect = el.getBoundingClientRect();
+                const style = this.getTextStyle(slideId, field);
+                const computed = window.getComputedStyle(el);
+                window.widgetManager.addTextWidgetFrom(slideId, {
+                    text: el.innerText,
+                    x: Math.max(0, (rect.left - slideRect.left) / scale + 24),
+                    y: Math.max(0, (rect.top - slideRect.top) / scale + 24),
+                    width: rect.width / scale,
+                    height: rect.height / scale,
+                    fontFamily: style.fontFamily || computed.fontFamily || '',
+                    fontSize: style.fontSize || parseFloat(computed.fontSize) || 32,
+                    fontWeight: style.fontWeight || (style.bold ? '700' : computed.fontWeight) || '600',
+                    color: style.color || computed.color || '#ffffff',
+                    align: style.align || computed.textAlign || 'left',
+                    bold: !!style.bold,
+                    italic: !!style.italic,
+                    underline: !!style.underline,
+                    strikethrough: !!style.strikethrough,
+                    uppercase: !!style.uppercase
+                });
+            }
+
+            // Removes a title/body element from its slide entirely (as opposed to
+            // just clearing its text) - the user-facing "Delete" action in the
+            // context menu. Structural, like SlideManager.detachNode/attachNode
+            // and WidgetManager.attachWidget/detachWidget, so it goes through the
+            // same 'text-structural' undo/redo entry kind (see HistoryManager.apply)
+            // rather than the 'text-field' before/after-text kind used for normal
+            // editing.
+            deleteTextElement(el, slideId, field) {
+                if (!el || !el.parentNode) return;
+                const entry = {
+                    kind: 'text-structural',
+                    op: 'delete',
+                    node: el,
+                    parent: el.parentNode,
+                    nextSibling: el.nextSibling,
+                    handles: el._textHandles,
+                    slideId: slideId,
+                    field: field
+                };
+                this.detachTextElement(entry);
+                window.historyManager.push(entry);
+            }
+
+            attachTextElement(entry) {
+                const beforeSibling = entry.nextSibling && entry.nextSibling.parentNode === entry.parent ? entry.nextSibling : null;
+                if (beforeSibling) entry.parent.insertBefore(entry.node, beforeSibling);
+                else entry.parent.appendChild(entry.node);
+                if (this.editableElements.indexOf(entry.node) === -1) this.editableElements.push(entry.node);
+                if (entry.handles) {
+                    entry.handles.parent.appendChild(entry.handles.moveHandle);
+                    entry.handles.parent.appendChild(entry.handles.resizeHandle);
+                }
+                if (window.thumbnailManager) window.thumbnailManager.refresh(entry.slideId);
+                scheduleSave();
+            }
+
+            detachTextElement(entry) {
+                if (entry.node.parentNode) entry.node.parentNode.removeChild(entry.node);
+                const idx = this.editableElements.indexOf(entry.node);
+                if (idx !== -1) this.editableElements.splice(idx, 1);
+                if (entry.handles) {
+                    if (entry.handles.moveHandle.parentNode) entry.handles.moveHandle.parentNode.removeChild(entry.handles.moveHandle);
+                    if (entry.handles.resizeHandle.parentNode) entry.handles.resizeHandle.parentNode.removeChild(entry.handles.resizeHandle);
+                }
+                if (window.thumbnailManager) window.thumbnailManager.refresh(entry.slideId);
+                scheduleSave();
+            }
+
             restoreTextStyleSnapshot(slideId, field, style) {
                 if (!this.textStyles[slideId]) this.textStyles[slideId] = { title: textStyleDefaults(), body: textStyleDefaults() };
                 this.textStyles[slideId][field] = Object.assign(textStyleDefaults(), style);
@@ -5131,6 +5281,11 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 moveHandle.className = 'text-move-handle';
                 moveHandle.innerHTML = TEXT_MOVE_ICON;
                 moveHandle.title = 'Drag to move';
+                // Back-reference so the contextmenu handler can resolve a
+                // right-click landing on the handle itself (a sibling of el, not
+                // a descendant - closest('.slide-title, .slide-body') alone can't
+                // find el from here) back to the text element it belongs to.
+                moveHandle._textOwner = el;
                 parent.appendChild(moveHandle);
 
                 // Reuses .widget-resize-handle as-is for the exact same bottom-right
@@ -5139,6 +5294,7 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 const resizeHandle = document.createElement('div');
                 resizeHandle.className = 'widget-resize-handle text-resize-handle';
                 resizeHandle.title = 'Drag to resize';
+                resizeHandle._textOwner = el;
                 parent.appendChild(resizeHandle);
 
                 const handles = { moveHandle: moveHandle, resizeHandle: resizeHandle, parent: parent };
@@ -5326,6 +5482,11 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
             // this logic.
             bindElement(el) {
                 const handles = this.createTextHandles(el);
+                // Stashed on the element itself (rather than a side map) so
+                // deleteTextElement/attachTextElement/detachTextElement can move
+                // this element's handles along with it without needing their own
+                // lookup - createTextHandles is only ever called once per element.
+                el._textHandles = handles;
                 el.addEventListener('focus', () => {
                     if (!this.isActive) return;
                     const slide = el.closest('.slide');

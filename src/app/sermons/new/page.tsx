@@ -118,7 +118,7 @@ Now faith is confidence in what we hope for and assurance about what we do not s
                   fontSize: '0.95rem',
                   lineHeight: '1.5',
                   padding: '1rem',
-                  background: 'rgba(0, 0, 0, 0.3)'
+                  background: 'var(--bg-surface-hover)'
                 }}
               />
             </div>
@@ -180,7 +180,7 @@ Now faith is confidence in what we hope for and assurance about what we do not s
                         {/* Header banner */}
                         <div style={{
                           padding: '0.5rem 1rem',
-                          background: index === 0 ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.03)',
+                          background: index === 0 ? 'var(--primary-glow)' : 'var(--bg-surface-hover)',
                           borderBottom: '1px solid var(--border-color)',
                           display: 'flex',
                           justifyContent: 'space-between',
