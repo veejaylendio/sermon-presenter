@@ -1392,6 +1392,18 @@ const WIDGET_SYSTEM_CSS = `
     cursor: not-allowed;
     pointer-events: none;
 }
+/* Structural edit controls (edit toggle, add widget, add/delete slide,
+   undo/redo) now live in the parent app's title-bar toolbar instead of
+   floating over the deck - the buttons/handlers above stay fully wired
+   (driven via postMessage commands relayed from the parent, see
+   postToParent/postEditorState below) but are never rendered in this
+   iframe itself. */
+.edit-hotzone,
+.edit-toggle,
+.add-widget-toggle,
+.toolbar-btn {
+    display: none !important;
+}
 .widget-popover {
     position: fixed;
     top: 82px;
@@ -1580,6 +1592,22 @@ const WIDGET_SYSTEM_CSS = `
     cursor: pointer;
 }
 .widget-toggle-btn.active { background: var(--primary, #6366f1); color: #fff; border-color: var(--primary, #6366f1); }
+.widget-icon-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.widget-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 1;
+    padding: 7px;
+    border-radius: 8px;
+    border: 1px solid rgba(0,0,0,0.15);
+    background: #fff;
+    color: #4b5563;
+    cursor: pointer;
+}
+.widget-icon-btn svg { width: 100%; height: 100%; }
+.widget-icon-btn:hover { background: rgba(99,102,241,0.08); }
+.widget-icon-btn.active { background: rgba(99,102,241,0.1); border-color: var(--primary, #6366f1); color: var(--primary, #6366f1); }
 .widget-section-title {
     font-size: 12px;
     font-weight: 700;
@@ -1673,64 +1701,6 @@ const FILMSTRIP_CSS = `
 }
 body.mode-present .slide-filmstrip {
     display: none;
-}
-`;
-
-/* ==== Floating rich-text toolbar (Issue 3) ====
-   One shared toolbar UI for slide title/body text AND text widgets. Neutral
-   light editor chrome (matches .widget-config-panel), never slide-theme
-   colors, and deliberately reuses .widget-toggle-btn/.widget-toggle-group
-   (already styled above for the widget sidebar) for its B/I/U/S/alignment
-   controls so the visual language is enforced by sharing CSS classes. */
-const FLOATING_TOOLBAR_CSS = `
-.floating-toolbar {
-    position: fixed;
-    z-index: 10010;
-    display: none;
-    align-items: center;
-    gap: 6px;
-    background: #ffffff;
-    border-radius: 999px;
-    padding: 6px 10px;
-    box-shadow: 0 12px 32px rgba(0,0,0,0.22);
-    border: 1px solid rgba(0,0,0,0.08);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-}
-.floating-toolbar-select {
-    border: 1px solid rgba(0,0,0,0.15);
-    border-radius: 6px;
-    padding: 4px 6px;
-    font-size: 12px;
-    max-width: 130px;
-    background: #fff;
-    font-family: inherit;
-}
-.floating-toolbar-number {
-    width: 54px;
-    border: 1px solid rgba(0,0,0,0.15);
-    border-radius: 6px;
-    padding: 4px 6px;
-    font-size: 12px;
-    font-family: inherit;
-}
-.floating-toolbar input[type="color"] {
-    width: 28px;
-    height: 28px;
-    border: none;
-    border-radius: 6px;
-    padding: 0;
-    cursor: pointer;
-}
-.floating-toolbar .widget-toggle-group {
-    display: flex;
-    gap: 4px;
-}
-.floating-toolbar .widget-toggle-btn {
-    padding: 5px 9px;
-    font-size: 12px;
-}
-body.mode-present .floating-toolbar {
-    display: none !important;
 }
 `;
 
@@ -2025,6 +1995,7 @@ SlideManager.prototype.getCurrentSlideId = function () {
 
 SlideManager.prototype.updateDeleteButtonState = function () {
     if (this.deleteBtn) this.deleteBtn.disabled = this.order.length <= 1;
+    postEditorState();
 };
 
 SlideManager.prototype.addSlideAfter = function (afterId) {
@@ -2438,6 +2409,7 @@ HistoryManager.prototype.setEditMode = function (active) {
 HistoryManager.prototype.updateButtons = function () {
     if (this.undoBtn) this.undoBtn.disabled = this.undoStack.length === 0;
     if (this.redoBtn) this.redoBtn.disabled = this.redoStack.length === 0;
+    postEditorState();
 };
 `;
 
@@ -2453,6 +2425,50 @@ var WIDGET_ICONS = {
     shape: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><circle cx="17.5" cy="6.5" r="3.5"></circle><path d="M3 21l4.5-8 4.5 8z"></path></svg>',
     text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>'
 };
+
+// Shape-type picker: rendered as an icon grid (see openConfigPanel/buildShapeFields)
+// instead of a <select>, so choosing a shape is a visual pick rather than reading
+// label text. Each icon is a rough glyph for the shape, not a literal preview of
+// its clip-path - kept as plain stroke outlines to match WIDGET_ICONS' style.
+var SHAPE_ICON_SVG = {
+    rectangle: '<rect x="3" y="5" width="18" height="14" rx="1"></rect>',
+    snip: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6"></path>',
+    circle: '<ellipse cx="12" cy="12" rx="9" ry="6"></ellipse>',
+    triangle: '<polygon points="12 3 21 20 3 20"></polygon>',
+    rightTriangle: '<polygon points="4 4 4 20 20 20"></polygon>',
+    diamond: '<polygon points="12 2 22 12 12 22 2 12"></polygon>',
+    pentagon: '<polygon points="12 2 22 9.5 18 21 6 21 2 9.5"></polygon>',
+    polygon: '<polygon points="7 2 17 2 22 12 17 22 7 22 2 12"></polygon>',
+    star: '<polygon points="12 2 15 9 22 9.5 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.5 9 9"></polygon>',
+    arrow: '<path d="M2 10h11V6l9 6-9 6v-4H2z"></path>',
+    chevron: '<polygon points="0 0 18 0 24 12 18 24 0 24 6 12"></polygon>',
+    parallelogram: '<polygon points="6 0 24 0 18 24 0 24"></polygon>',
+    trapezoid: '<polygon points="5 0 19 0 24 24 0 24"></polygon>',
+    line: '<line x1="4" y1="20" x2="20" y2="4"></line>'
+};
+
+var SHAPE_TYPES = [
+    { value: 'rectangle', label: 'Rectangle' },
+    { value: 'snip', label: 'Snipped Rectangle' },
+    { value: 'circle', label: 'Oval' },
+    { value: 'triangle', label: 'Triangle' },
+    { value: 'rightTriangle', label: 'Right Triangle' },
+    { value: 'diamond', label: 'Diamond' },
+    { value: 'pentagon', label: 'Pentagon' },
+    { value: 'polygon', label: 'Hexagon' },
+    { value: 'star', label: 'Star' },
+    { value: 'arrow', label: 'Arrow' },
+    { value: 'chevron', label: 'Chevron' },
+    { value: 'parallelogram', label: 'Parallelogram' },
+    { value: 'trapezoid', label: 'Trapezoid' },
+    { value: 'line', label: 'Line' }
+].map(function (t) {
+    return {
+        value: t.value,
+        label: t.label,
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + SHAPE_ICON_SVG[t.value] + '</svg>'
+    };
+});
 
 /* ==== Bare control factories ====
    Each factory builds ONE input/control element and wires its raw input/change
@@ -2529,22 +2545,6 @@ function makeCheckboxInput(checked, onChange) {
     return input;
 }
 
-// Compact icon-toggle button (used by the floating toolbar's B/I/U/S/uppercase
-// controls). Styled via the existing .widget-toggle-btn class shared with the
-// sidebar's buttonGroupField buttons.
-function makeToggleButton(active, innerHtml, onToggle) {
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'widget-toggle-btn' + (active ? ' active' : '');
-    btn.innerHTML = innerHtml;
-    btn.addEventListener('click', function () {
-        var next = !btn.classList.contains('active');
-        btn.classList.toggle('active', next);
-        onToggle(next);
-    });
-    return btn;
-}
-
 function makeButtonGroup(value, options, onChange) {
     var wrap = document.createElement('div');
     wrap.className = 'widget-toggle-group';
@@ -2563,6 +2563,113 @@ function makeButtonGroup(value, options, onChange) {
         wrap.appendChild(b);
     });
     return wrap;
+}
+
+// Icon-grid variant of makeButtonGroup, for pickers (shape type) where a
+// glyph reads faster than label text - same active/onChange contract, just
+// options carry an icon (svg markup string) instead of relying on textContent.
+function makeIconButtonGroup(value, options, onChange) {
+    var wrap = document.createElement('div');
+    wrap.className = 'widget-icon-grid';
+    var buttons = [];
+    options.forEach(function (opt) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'widget-icon-btn' + (opt.value === value ? ' active' : '');
+        b.title = opt.label;
+        b.setAttribute('aria-label', opt.label);
+        b.innerHTML = opt.icon;
+        b.addEventListener('click', function () {
+            buttons.forEach(function (bb) { bb.classList.remove('active'); });
+            b.classList.add('active');
+            onChange(opt.value);
+        });
+        buttons.push(b);
+        wrap.appendChild(b);
+    });
+    return wrap;
+}
+
+// A <video src> element can only play a direct media file - it can't play a
+// YouTube/Vimeo *page* link (their watch pages require the site's own player
+// and don't expose a raw, hotlinkable file for <video> to fetch). Detecting
+// those page URLs and switching to the provider's <iframe> embed instead is
+// what makes pasting an ordinary "copied from the address bar" video link
+// actually work, rather than silently producing a blank/broken player.
+//
+// Deliberately no regex literals here: this whole block is itself text
+// inside the WIDGET_SYSTEM_JS template literal (see the note at the top of
+// this file about avoiding backticks), and a backslash escape like \. or \/
+// only survives being embedded twice - once when this .ts file's own
+// template literal is evaluated, once when the resulting <script> text is
+// parsed by the browser - if it's doubled up exactly right. Getting that
+// wrong silently truncates the regex and throws a SyntaxError that kills the
+// entire deck script, not just this widget - plain indexOf/slice sidesteps
+// the whole hazard.
+function findMarker(haystack, needle) {
+    var idx = haystack.indexOf(needle);
+    return idx === -1 ? -1 : idx + needle.length;
+}
+
+function extractToken(src, from) {
+    var stops = '&#?/ ';
+    var end = src.length;
+    for (var i = from; i < src.length; i++) {
+        if (stops.indexOf(src.charAt(i)) !== -1) { end = i; break; }
+    }
+    return src.slice(from, end);
+}
+
+function isDigitsOnly(s) {
+    if (!s) return false;
+    for (var i = 0; i < s.length; i++) {
+        var code = s.charCodeAt(i);
+        if (code < 48 || code > 57) return false;
+    }
+    return true;
+}
+
+function getVideoEmbedInfo(src) {
+    if (!src) return null;
+    var lower = src.toLowerCase();
+    if (lower.indexOf('youtube.com') !== -1 || lower.indexOf('youtube-nocookie.com') !== -1 || lower.indexOf('youtu.be') !== -1) {
+        var from = -1;
+        if (lower.indexOf('watch') !== -1 && findMarker(lower, 'v=') !== -1) {
+            from = findMarker(lower, 'v=');
+        } else if (findMarker(lower, 'youtu.be/') !== -1) {
+            from = findMarker(lower, 'youtu.be/');
+        } else if (findMarker(lower, '/shorts/') !== -1) {
+            from = findMarker(lower, '/shorts/');
+        } else if (findMarker(lower, '/embed/') !== -1) {
+            from = findMarker(lower, '/embed/');
+        }
+        if (from === -1) return null;
+        var id = extractToken(src, from);
+        return id ? { provider: 'youtube', id: id } : null;
+    }
+    if (lower.indexOf('vimeo.com') !== -1) {
+        var marker = findMarker(lower, '/video/') !== -1 ? '/video/' : 'vimeo.com/';
+        var vFrom = findMarker(lower, marker);
+        if (vFrom === -1) return null;
+        var vId = extractToken(src, vFrom);
+        return isDigitsOnly(vId) ? { provider: 'vimeo', id: vId } : null;
+    }
+    return null;
+}
+
+function buildVideoEmbedSrc(info, widget) {
+    if (info.provider === 'youtube') {
+        var params = ['rel=0'];
+        if (widget.autoplay) { params.push('autoplay=1'); params.push('mute=1'); }
+        if (widget.loop) { params.push('loop=1'); params.push('playlist=' + info.id); }
+        if (widget.controls === false) params.push('controls=0');
+        return 'https://www.youtube.com/embed/' + info.id + '?' + params.join('&');
+    }
+    var vparams = [];
+    if (widget.autoplay) { vparams.push('autoplay=1'); vparams.push('muted=1'); }
+    if (widget.loop) vparams.push('loop=1');
+    if (widget.controls === false) vparams.push('controls=0');
+    return 'https://player.vimeo.com/video/' + info.id + (vparams.length ? '?' + vparams.join('&') : '');
 }
 
 function openWidgetLightbox(src) {
@@ -2689,12 +2796,14 @@ WidgetManager.prototype.togglePopover = function () {
     } else {
         this.popover.classList.add('open');
         this.addToggle.classList.add('active');
+        postEditorState();
     }
 };
 
 WidgetManager.prototype.closePopover = function () {
     this.popover.classList.remove('open');
     this.addToggle.classList.remove('active');
+    postEditorState();
 };
 
 WidgetManager.prototype.setEditMode = function (active) {
@@ -2925,6 +3034,14 @@ WidgetManager.prototype.buildInner = function (widget) {
             inner.alt = '';
             inner.loading = widget.lazy ? 'lazy' : 'eager';
             inner.draggable = false;
+            inner.addEventListener('error', function () {
+                var wrapper = widget.el;
+                if (!wrapper || wrapper.firstChild !== inner) return;
+                var msg = document.createElement('div');
+                msg.className = 'widget-placeholder';
+                msg.textContent = "Couldn't load image — the URL must point directly to an image file, not a webpage";
+                wrapper.replaceChild(msg, inner);
+            });
             inner.addEventListener('click', function (e) {
                 if (window.editorController && window.editorController.isActive) return;
                 if (widget.linkAction === 'lightbox') {
@@ -2942,28 +3059,55 @@ WidgetManager.prototype.buildInner = function (widget) {
         }
     } else if (widget.type === 'video') {
         if (widget.src) {
-            inner = document.createElement('video');
-            inner.className = 'widget-video-el';
-            inner.src = widget.src;
-            if (widget.poster) inner.poster = widget.poster;
-            inner.loop = !!widget.loop;
-            inner.controls = !!widget.controls;
-            inner.preload = widget.preload || 'metadata';
-            inner.muted = widget.autoplay ? true : !!widget.muted;
-            inner.autoplay = !!widget.autoplay;
-            inner.playbackRate = parseFloat(widget.speed) || 1;
-            if (!widget.fullscreenAllowed) inner.setAttribute('controlsList', 'nofullscreen');
-            inner.addEventListener('loadedmetadata', function () {
+            var embedInfo = getVideoEmbedInfo(widget.src);
+            if (embedInfo) {
+                // A YouTube/Vimeo *page* link, not a direct media file - <video src>
+                // can't play these, so embed the provider's own player instead.
+                inner = document.createElement('iframe');
+                inner.className = 'widget-video-el widget-video-embed';
+                inner.src = buildVideoEmbedSrc(embedInfo, widget);
+                inner.setAttribute('frameborder', '0');
+                inner.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share');
+                inner.style.border = 'none';
+                if (widget.fullscreenAllowed) inner.setAttribute('allowfullscreen', '');
+                inner.addEventListener('click', function () {
+                    if (window.editorController && window.editorController.isActive) return;
+                    if (widget.linkAction === 'external' && widget.linkUrl) {
+                        window.open(widget.linkUrl, '_blank', 'noopener');
+                    }
+                });
+            } else {
+                inner = document.createElement('video');
+                inner.className = 'widget-video-el';
+                inner.src = widget.src;
+                if (widget.poster) inner.poster = widget.poster;
+                inner.loop = !!widget.loop;
+                inner.controls = !!widget.controls;
+                inner.preload = widget.preload || 'metadata';
+                inner.muted = widget.autoplay ? true : !!widget.muted;
+                inner.autoplay = !!widget.autoplay;
                 inner.playbackRate = parseFloat(widget.speed) || 1;
-            });
-            inner.addEventListener('click', function () {
-                if (window.editorController && window.editorController.isActive) return;
-                if (widget.linkAction === 'fullscreen') {
-                    if (inner.requestFullscreen) inner.requestFullscreen();
-                } else if (widget.linkAction === 'external' && widget.linkUrl) {
-                    window.open(widget.linkUrl, '_blank', 'noopener');
-                }
-            });
+                if (!widget.fullscreenAllowed) inner.setAttribute('controlsList', 'nofullscreen');
+                inner.addEventListener('loadedmetadata', function () {
+                    inner.playbackRate = parseFloat(widget.speed) || 1;
+                });
+                inner.addEventListener('error', function () {
+                    var wrapper = widget.el;
+                    if (!wrapper || wrapper.firstChild !== inner) return;
+                    var msg = document.createElement('div');
+                    msg.className = 'widget-placeholder';
+                    msg.textContent = "Couldn't load video — use a direct video file URL, or a YouTube/Vimeo link";
+                    wrapper.replaceChild(msg, inner);
+                });
+                inner.addEventListener('click', function () {
+                    if (window.editorController && window.editorController.isActive) return;
+                    if (widget.linkAction === 'fullscreen') {
+                        if (inner.requestFullscreen) inner.requestFullscreen();
+                    } else if (widget.linkAction === 'external' && widget.linkUrl) {
+                        window.open(widget.linkUrl, '_blank', 'noopener');
+                    }
+                });
+            }
         } else {
             inner = document.createElement('div');
             inner.className = 'widget-placeholder';
@@ -3087,11 +3231,13 @@ WidgetManager.prototype.applyStyles = function (widget) {
         filterParts.push('grayscale(' + widget.grayscale + '%)');
         inner.style.filter = filterParts.join(' ');
         inner.style.cursor = widget.linkAction !== 'none' ? 'pointer' : '';
-    } else if (widget.type === 'video' && inner.tagName === 'VIDEO') {
+    } else if (widget.type === 'video' && (inner.tagName === 'VIDEO' || inner.tagName === 'IFRAME')) {
         inner.style.width = '100%';
         inner.style.height = '100%';
         inner.style.display = 'block';
-        inner.style.objectFit = widget.fit === 'original' ? 'none' : (widget.fit === 'stretch' ? 'fill' : widget.fit);
+        if (inner.tagName === 'VIDEO') {
+            inner.style.objectFit = widget.fit === 'original' ? 'none' : (widget.fit === 'stretch' ? 'fill' : widget.fit);
+        }
     } else if (widget.type === 'shape') {
         var bg;
         if (widget.fillType === 'transparent') {
@@ -3113,6 +3259,33 @@ WidgetManager.prototype.applyStyles = function (widget) {
             inner.style.borderRadius = '0';
         } else if (widget.shapeType === 'polygon') {
             inner.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)';
+            inner.style.borderRadius = '0';
+        } else if (widget.shapeType === 'rightTriangle') {
+            inner.style.clipPath = 'polygon(0% 0%, 0% 100%, 100% 100%)';
+            inner.style.borderRadius = '0';
+        } else if (widget.shapeType === 'diamond') {
+            inner.style.clipPath = 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)';
+            inner.style.borderRadius = '0';
+        } else if (widget.shapeType === 'pentagon') {
+            inner.style.clipPath = 'polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)';
+            inner.style.borderRadius = '0';
+        } else if (widget.shapeType === 'star') {
+            inner.style.clipPath = 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)';
+            inner.style.borderRadius = '0';
+        } else if (widget.shapeType === 'arrow') {
+            inner.style.clipPath = 'polygon(0% 35%, 60% 35%, 60% 10%, 100% 50%, 60% 90%, 60% 65%, 0% 65%)';
+            inner.style.borderRadius = '0';
+        } else if (widget.shapeType === 'chevron') {
+            inner.style.clipPath = 'polygon(0% 0%, 75% 0%, 100% 50%, 75% 100%, 0% 100%, 25% 50%)';
+            inner.style.borderRadius = '0';
+        } else if (widget.shapeType === 'parallelogram') {
+            inner.style.clipPath = 'polygon(25% 0%, 100% 0%, 75% 100%, 0% 100%)';
+            inner.style.borderRadius = '0';
+        } else if (widget.shapeType === 'trapezoid') {
+            inner.style.clipPath = 'polygon(20% 0%, 80% 0%, 100% 100%, 0% 100%)';
+            inner.style.borderRadius = '0';
+        } else if (widget.shapeType === 'snip') {
+            inner.style.clipPath = 'polygon(0% 0%, 80% 0%, 100% 20%, 100% 100%, 0% 100%)';
             inner.style.borderRadius = '0';
         } else if (widget.shapeType === 'line') {
             inner.style.clipPath = 'none';
@@ -3541,6 +3714,19 @@ WidgetManager.prototype.buttonGroupField = function (container, labelText, value
     container.appendChild(group);
 };
 
+WidgetManager.prototype.iconButtonGroupField = function (container, labelText, value, options, onChange, widget) {
+    var group = this.fieldGroup(labelText);
+    var self = this;
+    var wrap = makeIconButtonGroup(value, options, function (v) {
+        var before = widget ? self.snapshotWidget(widget) : null;
+        onChange(v);
+        if (widget) self.pushFieldEdit(widget, before, self.snapshotWidget(widget));
+        self.save();
+    });
+    group.appendChild(wrap);
+    container.appendChild(group);
+};
+
 WidgetManager.prototype.fileField = function (container, labelText, onDataUrl, widget, accept) {
     var group = this.fieldGroup(labelText);
     var input = document.createElement('input');
@@ -3750,11 +3936,10 @@ WidgetManager.prototype.buildVideoFields = function (body, widget) {
 WidgetManager.prototype.buildShapeFields = function (body, widget) {
     var self = this;
     this.sectionTitle(body, 'Shape');
-    this.selectField(body, 'Shape type', widget.shapeType, [
-        { value: 'rectangle', label: 'Rectangle' }, { value: 'circle', label: 'Circle' },
-        { value: 'triangle', label: 'Triangle' }, { value: 'line', label: 'Line' },
-        { value: 'polygon', label: 'Polygon' }
-    ], function (v) { widget.shapeType = v; self.applyStyles(widget); }, widget);
+    this.iconButtonGroupField(body, 'Shape type', widget.shapeType, SHAPE_TYPES, function (v) {
+        widget.shapeType = v;
+        self.applyStyles(widget);
+    }, widget);
     this.selectField(body, 'Fill type', widget.fillType, [
         { value: 'solid', label: 'Solid' }, { value: 'gradient', label: 'Gradient' },
         { value: 'transparent', label: 'Transparent' }
@@ -3807,23 +3992,26 @@ WidgetManager.prototype.openConfigPanel = function (widget) {
 };
 `;
 
-// One shared floating rich-text toolbar for BOTH slide title/body text and
-// text widgets (Issue 3) - a single UI/code-path, not two toolbars that merely
-// look alike. Built from the same bare-control factories
-// (makeTextInput/makeSelect/makeColorInput/makeToggleButton/makeButtonGroup)
-// defined above in WIDGET_SYSTEM_JS, and for kind:'widget' calls directly into
-// WidgetManager's existing applyStyles/beginFieldEdit/commitFieldEdit/
-// pushFieldEdit/save methods - the exact same underlying code path the sidebar
-// uses, just a different container. Written without template literals/
-// backticks throughout since this whole file is itself one giant template
-// literal.
+// One shared rich-text formatting bridge for BOTH slide title/body text and
+// text widgets (Issue 3) - a single code path, not two that merely look
+// alike. For kind:'widget' it calls directly into WidgetManager's existing
+// applyStyles/beginFieldEdit/commitFieldEdit/pushFieldEdit/save methods - the
+// exact same underlying code path the sidebar uses, just driven by the
+// parent's toolbar instead. Written without template literals/backticks
+// throughout since this whole file is itself one giant template literal.
 const TOOLBAR_SYSTEM_JS = `
+// Bridge for the shared rich-text formatting toolbar (Issue 3): the actual
+// controls now live in the parent app's title-bar toolbar, outside this
+// iframe entirely (see PresentationViewerClient.tsx's editor-toolbar), so
+// this class builds no DOM of its own anymore. It just tracks which
+// element/widget is currently being edited, mirrors its style fields to the
+// parent via postToParent, and applies format changes the parent sends back
+// through the exact same getAccessor()-based code path the old in-page pill
+// used for BOTH slide title/body text and text widgets.
 function FloatingToolbar() {
-    this.el = document.createElement('div');
-    this.el.className = 'floating-toolbar';
-    document.body.appendChild(this.el);
     this.currentKind = null;
     this.currentTarget = null;
+    this.accessor = null;
 }
 
 // Builds a { get, beginEdit, commitEdit, pushEdit, snapshot, setField, fields }
@@ -3874,101 +4062,67 @@ FloatingToolbar.prototype.getAccessor = function (kind, targetEl, ctx) {
     };
 };
 
-FloatingToolbar.prototype.buildContent = function (accessor) {
-    var self = this;
-    this.el.innerHTML = '';
-
-    var familySelect = makeSelect(accessor.fields.fontFamily || '', [
-        { value: '', label: 'Theme font' },
-        { value: 'Inter, sans-serif', label: 'Inter' },
-        { value: 'Georgia, serif', label: 'Georgia' },
-        { value: '"Playfair Display", serif', label: 'Playfair Display' },
-        { value: 'Arial, sans-serif', label: 'Arial' },
-        { value: '"Courier New", monospace', label: 'Courier New' },
-        { value: 'system-ui, sans-serif', label: 'System UI' }
-    ], function (v) {
-        var before = accessor.snapshot();
-        accessor.setField('fontFamily', v || null);
-        accessor.pushEdit(before, accessor.snapshot());
-    });
-    familySelect.className = 'floating-toolbar-select';
-    this.el.appendChild(familySelect);
-
-    var sizeInput = makeNumberInput(accessor.fields.fontSize || '', function (v) {
-        accessor.setField('fontSize', v);
-    }, { min: 8, max: 300 });
-    sizeInput.className = 'floating-toolbar-number';
-    sizeInput.title = 'Font size (px)';
-    sizeInput.addEventListener('focus', function () { accessor.beginEdit(); });
-    sizeInput.addEventListener('blur', function () { accessor.commitEdit(); });
-    this.el.appendChild(sizeInput);
-
-    var colorInput = makeColorInput(accessor.fields.color || '#000000', function (v) {
-        accessor.setField('color', v);
-    });
-    colorInput.title = 'Text color';
-    colorInput.addEventListener('focus', function () { accessor.beginEdit(); });
-    colorInput.addEventListener('change', function () { accessor.commitEdit(); });
-    colorInput.addEventListener('blur', function () { accessor.commitEdit(); });
-    this.el.appendChild(colorInput);
-
-    function toggleBtn(active, innerHtml, key, title) {
-        var btn = makeToggleButton(active, innerHtml, function (next) {
-            var before = accessor.snapshot();
-            accessor.setField(key, next);
-            accessor.pushEdit(before, accessor.snapshot());
-        });
-        btn.title = title;
-        self.el.appendChild(btn);
-        return btn;
-    }
-    toggleBtn(accessor.fields.bold, '<b>B</b>', 'bold', 'Bold');
-    toggleBtn(accessor.fields.italic, '<i>I</i>', 'italic', 'Italic');
-    toggleBtn(accessor.fields.underline, '<u>U</u>', 'underline', 'Underline');
-    toggleBtn(accessor.fields.strikethrough, '<s>S</s>', 'strikethrough', 'Strikethrough');
-    toggleBtn(accessor.fields.uppercase, 'AA', 'uppercase', 'Uppercase');
-
-    var alignGroup = makeButtonGroup(accessor.fields.align || '', [
-        { value: 'left', label: 'L' }, { value: 'center', label: 'C' },
-        { value: 'right', label: 'R' }, { value: 'justify', label: 'J' }
-    ], function (v) {
-        var before = accessor.snapshot();
-        accessor.setField('align', v);
-        accessor.pushEdit(before, accessor.snapshot());
-    });
-    this.el.appendChild(alignGroup);
-};
-
 FloatingToolbar.prototype.showFor = function (targetEl, kind, ctx) {
     if (!document.body.classList.contains('mode-edit')) return;
     if (!targetEl) return;
     this.currentKind = kind;
     this.currentTarget = targetEl;
-    var accessor = this.getAccessor(kind, targetEl, ctx);
-    this.buildContent(accessor);
-    this.el.style.display = 'flex';
-    this.position(targetEl);
-};
-
-FloatingToolbar.prototype.position = function (targetEl) {
-    var rect = targetEl.getBoundingClientRect();
-    var toolbarRect = this.el.getBoundingClientRect();
-    var top = rect.top - toolbarRect.height - 10;
-    if (top < 8) top = rect.bottom + 10;
-    var maxLeft = window.innerWidth - toolbarRect.width - 8;
-    var left = Math.min(Math.max(rect.left, 8), Math.max(maxLeft, 8));
-    this.el.style.top = top + 'px';
-    this.el.style.left = left + 'px';
+    this.accessor = this.getAccessor(kind, targetEl, ctx);
+    postToParent({ type: 'sp-text-focused', kind: kind, fields: this.accessor.fields });
 };
 
 FloatingToolbar.prototype.hide = function () {
-    this.el.style.display = 'none';
+    if (!this.currentKind && !this.currentTarget) return;
     this.currentKind = null;
     this.currentTarget = null;
+    this.accessor = null;
+    postToParent({ type: 'sp-text-blurred' });
 };
 
+// Always false now that the controls live outside this document - kept as a
+// no-op so the cross-document blur guard in InlineEditor.bindElement (which
+// used to skip hiding when focus moved INTO this toolbar's own DOM) simply
+// falls through to its activeElement recheck, which still does the right
+// thing since the parent side handles that guard for its own controls now.
 FloatingToolbar.prototype.contains = function (node) {
-    return !!node && this.el.contains(node);
+    return false;
+};
+
+// Driven by Escape and the capture-phase mousedown listener below (both
+// unambiguous - see their comments), and by the parent telling us the user
+// clicked/Esc'd outside its own toolbar. For a widget, deselectAll() already
+// hides this toolbar itself. For text, .blur() only runs bindElement's
+// commit/persist cleanup (see the note there) - this.hide() is what actually
+// closes the toolbar and notifies the parent, since blur alone no longer does.
+FloatingToolbar.prototype.blurActive = function () {
+    if (this.currentKind === 'widget') {
+        if (window.widgetManager) window.widgetManager.deselectAll();
+    } else if (this.currentTarget) {
+        this.currentTarget.blur();
+        this.hide();
+    }
+};
+
+// One-shot controls: font family select, B/I/U/S/uppercase toggles, alignment.
+FloatingToolbar.prototype.applyAtomic = function (key, value) {
+    if (!this.accessor) return;
+    var before = this.accessor.snapshot();
+    this.accessor.setField(key, value);
+    this.accessor.pushEdit(before, this.accessor.snapshot());
+};
+
+// Continuous controls: font size stepper, color picker. begin/live/end
+// mirrors the focus/input/blur sequence the old raw <input> elements drove
+// directly - live changes apply without pushing history, only the final end
+// commits one history entry for the whole drag/type sequence.
+FloatingToolbar.prototype.beginContinuous = function () {
+    if (this.accessor) this.accessor.beginEdit();
+};
+FloatingToolbar.prototype.applyLive = function (key, value) {
+    if (this.accessor) this.accessor.setField(key, value);
+};
+FloatingToolbar.prototype.endContinuous = function () {
+    if (this.accessor) this.accessor.commitEdit();
 };
 `;
 
@@ -4410,9 +4564,6 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
         /* Filmstrip (Edit Mode slide navigator) */
         ${FILMSTRIP_CSS}
 
-        /* Floating rich-text toolbar */
-        ${FLOATING_TOOLBAR_CSS}
-
         /* Right-click context menu */
         ${CONTEXT_MENU_CSS}
 
@@ -4452,6 +4603,28 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
             }
         }
 
+        function postToParent(msg) {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage(msg, '*');
+            }
+        }
+
+        // Snapshot of the structural toolbar's button states (edit-active,
+        // undo/redo availability, delete-slide availability, add-widget-popover
+        // open) - sent to the parent app whenever any of it changes, since the
+        // buttons that used to live in this document (and read this document's
+        // own DOM/class state directly) now live in the parent's title bar.
+        function postEditorState() {
+            postToParent({
+                type: 'sp-editor-state',
+                isEditActive: !!(window.editorController && window.editorController.isActive),
+                canUndo: !!(window.historyManager && window.historyManager.undoStack.length > 0),
+                canRedo: !!(window.historyManager && window.historyManager.redoStack.length > 0),
+                canDeleteSlide: !!(window.slideManager && window.slideManager.order.length > 1),
+                addWidgetOpen: !!(window.widgetManager && window.widgetManager.popover && window.widgetManager.popover.classList.contains('open'))
+            });
+        }
+
         // document.documentElement.outerHTML on its own would also capture the
         // editor's own transient UI: #slideFilmstrip's thumbnails (each one a
         // cloneNode(true) of an entire slide, so N slides roughly doubles the
@@ -4485,6 +4658,18 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
             if (panel) { panel.innerHTML = ''; panel.classList.remove('open'); }
             var popover = clone.querySelector('#widgetPopover');
             if (popover) { popover.innerHTML = ''; popover.classList.remove('open'); }
+            // .show/.active are transient hover/edit-state toggles (see
+            // setupHoverControls() and the various setEditMode() methods) driven
+            // by live JS state, not real content. A fresh load reconstructs that
+            // JS state from scratch (a new InlineEditor always starts inactive),
+            // so if these were baked into the saved markup - e.g. the user's mouse
+            // was over the edit hotzone at the exact moment this saved - nothing
+            // would ever clean them back up, leaving edit-only buttons visibly
+            // stuck open in Present Mode.
+            var toggles = clone.querySelectorAll('.edit-toggle, .add-widget-toggle, .toolbar-btn');
+            for (var t = 0; t < toggles.length; t++) {
+                toggles[t].classList.remove('show', 'active');
+            }
             return '<!DOCTYPE html>\\n' + clone.outerHTML;
         }
 
@@ -4508,8 +4693,63 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
         window.addEventListener('message', (e) => {
             if (!e.data) return;
             const action = e.data.action || e.data.type;
+
+            // Toolbar bridge (see postEditorState/FloatingToolbar above): the
+            // structural buttons and the rich-text formatting controls both now
+            // live in the parent app's title bar instead of this document, and
+            // talk to this document exclusively through these sp-* messages.
+            if (e.data.type === 'sp-command') {
+                const idMap = {
+                    'toggle-edit': 'editToggle',
+                    'toggle-add-widget': 'addWidgetToggle',
+                    'add-slide': 'addSlideToggle',
+                    'delete-slide': 'deleteSlideToggle',
+                    'undo': 'undoToggle',
+                    'redo': 'redoToggle'
+                };
+                const btnId = idMap[e.data.command];
+                const btn = btnId && document.getElementById(btnId);
+                if (btn) btn.click();
+                return;
+            }
+            if (e.data.type === 'sp-format-set') {
+                if (window.floatingToolbar) window.floatingToolbar.applyAtomic(e.data.key, e.data.value);
+                return;
+            }
+            if (e.data.type === 'sp-format-begin') {
+                if (window.floatingToolbar) window.floatingToolbar.beginContinuous();
+                return;
+            }
+            if (e.data.type === 'sp-format-live') {
+                if (window.floatingToolbar) window.floatingToolbar.applyLive(e.data.key, e.data.value);
+                return;
+            }
+            if (e.data.type === 'sp-format-end') {
+                if (window.floatingToolbar) window.floatingToolbar.endContinuous();
+                return;
+            }
+            if (e.data.type === 'sp-toolbar-blur') {
+                if (window.floatingToolbar) window.floatingToolbar.blurActive();
+                return;
+            }
+            if (e.data.type === 'sp-request-state') {
+                postEditorState();
+                return;
+            }
+
             if (action === 'set-mode' && (e.data.mode === 'edit' || e.data.mode === 'present')) {
                 applyMode(e.data.mode);
+                return;
+            }
+            if (action === 'flush-save') {
+                // Bypasses scheduleSave()'s debounce so a caller (e.g. "Present",
+                // right before it opens a separate window that re-fetches the saved
+                // deck from storage) can be sure the latest edits are captured
+                // instead of racing the normal 1.5s timer.
+                clearTimeout(__saveTimer);
+                if (window.parent && window.parent !== window) {
+                    window.parent.postMessage({ type: 'request-save', html: buildSaveableHtml() }, '*');
+                }
                 return;
             }
             if (!window.presentationController) return;
@@ -4619,7 +4859,13 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 let lastScrollTime = 0;
                 window.addEventListener('wheel', (e) => {
                     if (e.target.closest('[contenteditable="true"]')) return;
-                    
+                    // Scrolling inside the filmstrip (left) or widget config
+                    // panel (right) should only scroll their own content, not
+                    // also drive slide navigation - each already has its own
+                    // overflow-y:auto container, this just stops the event
+                    // from also being read as a stage-level wheel gesture.
+                    if (e.target.closest('#slideFilmstrip, #widgetConfigPanel')) return;
+
                     const now = Date.now();
                     if (now - lastScrollTime < 1000) return; // Debounce wheel
                     
@@ -5102,7 +5348,18 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                     const slide = el.closest('.slide');
                     window.thumbnailManager.refresh(slide.getAttribute('data-slide-id'));
                 });
-                el.addEventListener('blur', (e) => {
+                // Deliberately does NOT touch floatingToolbar here - deciding
+                // "should the format toolbar actually close" from a blur event is
+                // unreliable now that its controls live in the parent document:
+                // clicking one of them blurs this element the exact same way a
+                // genuine click-away does (both leave this document's
+                // activeElement at <body>), so there's no way to tell the two
+                // apart from in here. That decision is instead made explicitly by
+                // the capture-phase mousedown listener below (unambiguous - it
+                // only ever fires for clicks that land inside THIS document) and
+                // by the parent, which closes its own toolbar and tells this
+                // document to blur/deselect via sp-toolbar-blur (see blurActive).
+                el.addEventListener('blur', () => {
                     if (!this.isActive) return;
                     const slide = el.closest('.slide');
                     const slideId = slide.getAttribute('data-slide-id');
@@ -5111,21 +5368,6 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                     window.historyManager.commit({ after: text });
                     this.persistTextEdit(slideId, field, text, this.textStyles[slideId] && this.textStyles[slideId][field]);
                     this.hideTextHandles(handles);
-                    if (window.floatingToolbar) {
-                        const goingTo = e.relatedTarget || null;
-                        if (goingTo && window.floatingToolbar.contains(goingTo)) return;
-                        // relatedTarget isn't reliably populated for contentEditable blur
-                        // in every browser, so double-check on the next tick against
-                        // document.activeElement before hiding - otherwise clicking a
-                        // toolbar control (which itself steals focus) would immediately
-                        // hide the toolbar out from under the click.
-                        setTimeout(() => {
-                            const active = document.activeElement;
-                            if (!window.floatingToolbar.contains(active) && active !== el) {
-                                window.floatingToolbar.hide();
-                            }
-                        }, 0);
-                    }
                 });
             }
 
@@ -5179,6 +5421,7 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 if (window.widgetManager) window.widgetManager.setEditMode(this.isActive);
                 if (window.slideManager) window.slideManager.setEditMode(this.isActive);
                 if (window.historyManager) window.historyManager.setEditMode(this.isActive);
+                postEditorState();
             }
 
             // style is optional (backward compatible with the original 3-arg call
@@ -5311,10 +5554,40 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
         window.contextMenu = new ContextMenu();
         window.smartGuides = new SmartGuides();
 
+        // Escape closes the formatting toolbar when focus is still inside this
+        // iframe (a title/body field or a selected text widget) - the mirror
+        // case, Escape while focus is in the parent's own toolbar controls, is
+        // handled on the parent side and arrives here as sp-toolbar-blur.
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Escape') return;
+            if (window.floatingToolbar) window.floatingToolbar.blurActive();
+        });
+
+        // Closes the formatting toolbar on a genuine click elsewhere in THIS
+        // document while a title/body field is being edited (a click on a text
+        // widget is instead handled by WidgetManager's own click listener, which
+        // already does the equivalent target-containment check against the
+        // whole widget, not just its text element). Deliberately keyed off the
+        // click's target rather than the resulting blur/focus state - unlike
+        // blur, a click target is unambiguous even now that the toolbar's own
+        // controls live in the parent document (see the note on bindElement's
+        // blur handler): this listener simply never fires for a click that
+        // lands there, since it's a different document entirely. Capture phase
+        // so it runs before the click's own default focus-shifting.
+        document.addEventListener('mousedown', function (e) {
+            if (!window.floatingToolbar) return;
+            var kind = window.floatingToolbar.currentKind;
+            if (kind !== 'title' && kind !== 'body') return;
+            var target = window.floatingToolbar.currentTarget;
+            if (!target || target.contains(e.target)) return;
+            window.floatingToolbar.blurActive();
+        }, true);
+
         (function initEditorMode() {
             var requested = new URLSearchParams(window.location.search).get('editorMode');
             var mode = (requested === 'edit' || requested === 'present') ? requested : 'edit';
             applyMode(mode);
+            postEditorState();
         })();
     </script>
 </body>

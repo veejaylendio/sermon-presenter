@@ -276,7 +276,8 @@ a {
 }
 
 
-/* Presenter Control Dock UI */
+/* Presenter Control Dock UI - shown when presenting in-place (same window,
+   same monitor) instead of via the separate output/controller popups. */
 .presenter-dock {
   position: absolute;
   bottom: 1.5rem;
@@ -327,6 +328,21 @@ a {
   color: #ffffff;
 }
 
+.presenter-control-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.presenter-slide-counter {
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0 0.4rem;
+  user-select: none;
+  white-space: nowrap;
+}
+
 .presenter-control-btn-primary {
   background: var(--primary);
   border: 1px solid var(--primary);
@@ -340,47 +356,194 @@ a {
   color: #ffffff;
 }
 
-.presenter-control-btn:disabled {
-  opacity: 0.4;
+/* Editor Toolbar Row (Edit Mode) — the single consolidated top bar: it
+   replaces both the old page-level breadcrumb/title header AND the old
+   absolutely-positioned Saved/Present pill, sitting in normal document flow
+   above the deck iframe (which shrinks via flex:1 to make room). Left to
+   right: back-to-sermons breadcrumb, structural slide/widget controls, then
+   either the sermon title or (while a text container is focused inside the
+   deck) the contextual text-formatting controls in that same slot - see
+   PresentationViewerClient's postMessage bridge with slideTemplates.ts's
+   FloatingToolbar - and finally save status + Change Style + Present pinned
+   to the far right. */
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.25rem;
+  background: var(--bg-surface);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-bottom: 1px solid var(--border-color);
+  min-height: 52px;
+  flex: none;
+  color: #ffffff;
+}
+
+.editor-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: none;
+}
+
+.editor-toolbar-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 0.45rem 0.35rem;
+  background: var(--border-color);
+  flex: none;
+}
+
+.editor-toolbar-spacer {
+  flex: 1 1 auto;
+  min-width: 0.5rem;
+}
+
+.editor-toolbar-back {
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  flex: none;
+}
+
+.editor-toolbar-back:hover {
+  color: var(--text-primary);
+}
+
+.editor-toolbar-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.editor-icon-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition-fast);
+  flex: none;
+}
+
+.editor-icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.editor-icon-btn.is-active {
+  background: var(--primary-glow);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: var(--primary);
+}
+
+.editor-icon-btn:disabled {
+  opacity: 0.35;
   cursor: not-allowed;
 }
 
-.presenter-dock-divider {
-  height: 18px;
-  width: 1px;
-  background: rgba(255, 255, 255, 0.2);
-  margin: 0 0.25rem;
-}
-
-.presenter-slide-counter {
-  color: #ffffff;
-  font-size: 0.85rem;
-  font-weight: 600;
-  line-height: 1;
-  padding: 0 0.4rem;
-  user-select: none;
-  white-space: nowrap;
-}
-
-/* Editor Top Bar (Edit Mode) — lighter chrome than the presenter dock, since
-   editing isn't "live" the way presenting is. Docked top-right so it never
-   collides with the in-deck filmstrip (left) or toolbar buttons. */
-.editor-topbar {
-  position: absolute;
-  top: 1rem;
-  right: 1rem;
+.editor-format-group {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--radius-full);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
-  z-index: 1000;
-  background: rgba(15, 15, 15, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  color: #ffffff;
+  gap: 0.35rem;
+  opacity: 0;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.editor-format-group.is-shown {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.editor-select {
+  font-size: 0.78rem;
+  font-family: var(--font-sans);
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+  max-width: 132px;
+}
+
+.editor-number {
+  width: 46px;
+  font-size: 0.78rem;
+  font-family: var(--font-sans);
+  padding: 0.35rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.editor-color-input {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  flex: none;
+}
+
+.editor-toggle-btn {
+  width: 28px;
+  height: 28px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.editor-toggle-btn:hover {
+  border-color: var(--border-color-hover);
+}
+
+.editor-toggle-btn.is-active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.editor-align-group {
+  display: flex;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.editor-align-group .editor-toggle-btn {
+  border: none;
+  border-radius: 0;
+  border-right: 1px solid var(--border-color);
+}
+
+.editor-align-group .editor-toggle-btn:last-child {
+  border-right: none;
 }
 
 .editor-save-status {
@@ -393,5 +556,136 @@ a {
 
 .editor-save-status.is-error {
   color: var(--danger);
+}
+
+/* Presenter Controller (Canva-style popout window) - always dark, regardless
+   of the host app's light/dark theme, since this is a control-room UI meant
+   to sit next to a projected output rather than blend into the app chrome. */
+.pc-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0b0b0d;
+  color: #f4f4f5;
+  font-family: var(--font-sans);
+}
+
+.pc-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+}
+
+.pc-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pc-clock {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.pc-timer {
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #d4d4d8;
+}
+
+.pc-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f4f4f5;
+  cursor: pointer;
+  transition: var(--transition-fast);
+  flex: 0 0 auto;
+}
+
+.pc-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.pc-close-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.pc-main-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  margin: 0 1.25rem;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #000;
+}
+
+.pc-main-preview iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+.pc-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.pc-strip-edge-btn {
+  width: 30px;
+  height: 30px;
+}
+
+.pc-strip-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  padding: 4px;
+}
+
+.pc-thumb {
+  flex: 0 0 auto;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 2px solid transparent;
+  background: #000;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.pc-thumb:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.pc-thumb.is-active {
+  border-color: var(--primary);
+}
+
+.pc-thumb iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  pointer-events: none;
 }
 

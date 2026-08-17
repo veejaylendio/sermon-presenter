@@ -18,13 +18,31 @@ export async function GET(request: Request) {
 
     const html = await res.text()
 
+    // Presentations are regenerated in place at the same storage path whenever
+    // the user changes style or saves an edit - so a bare, unversioned url can
+    // legitimately point at different content over time, and must never be
+    // cached (that's what previously made a new theme render as the old one).
+    // But every url this app actually generates (selectThemeAndGenerateDeck,
+    // saveDeckHtml) is stamped with a `?v=<timestamp>` that changes on every
+    // save, making that specific versioned url immutable forever - so it's
+    // safe, and a real win, to let the browser cache it hard. This matters a
+    // lot for the presenter controller, which opens one iframe per slide (plus
+    // a main preview) all pointing at this exact same versioned url - without
+    // caching, that's N+1 full independent fetches of an identical payload.
+    let hasVersion = false
+    try {
+      hasVersion = new URL(url).searchParams.has('v')
+    } catch {
+      // Malformed url - fall through to the safe no-store default below.
+    }
+
     return new NextResponse(html, {
       status: 200,
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
-        // Presentations are regenerated in place whenever the user changes style.
-        // Caching this response is what made a new theme render as the previous one.
-        'Cache-Control': 'no-store, must-revalidate',
+        'Cache-Control': hasVersion
+          ? 'public, max-age=31536000, immutable'
+          : 'no-store, must-revalidate',
       },
     })
   } catch (err) {
