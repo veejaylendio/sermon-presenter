@@ -519,23 +519,6 @@ a {
   color: #fff;
 }
 
-.editor-align-group {
-  display: flex;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.editor-align-group .editor-toggle-btn {
-  border: none;
-  border-radius: 0;
-  border-right: 1px solid var(--border-color);
-}
-
-.editor-align-group .editor-toggle-btn:last-child {
-  border-right: none;
-}
-
 .editor-save-status {
   font-size: 0.8rem;
   color: var(--text-muted);

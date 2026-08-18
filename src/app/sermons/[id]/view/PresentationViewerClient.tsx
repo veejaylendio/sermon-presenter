@@ -38,7 +38,7 @@ interface TextFields {
   italic?: boolean
   underline?: boolean
   strikethrough?: boolean
-  uppercase?: boolean
+  uppercase?: boolean | null
 }
 
 interface TextFocus {
@@ -57,6 +57,7 @@ const FONT_OPTIONS: Array<{ value: string; label: string }> = [
 ]
 
 const ALIGN_OPTIONS = ['left', 'center', 'right', 'justify'] as const
+type AlignValue = (typeof ALIGN_OPTIONS)[number]
 
 function EditIcon() {
   return (
@@ -101,6 +102,38 @@ function RedoIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M15 14l5-5-5-5" /><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
+    </svg>
+  )
+}
+function AlignIcon({ align }: { align: AlignValue }) {
+  const lines: Record<AlignValue, { x1: number; x2: number }[]> = {
+    left: [
+      { x1: 3, x2: 21 },
+      { x1: 3, x2: 15 },
+      { x1: 3, x2: 17 },
+    ],
+    center: [
+      { x1: 3, x2: 21 },
+      { x1: 7, x2: 17 },
+      { x1: 5, x2: 19 },
+    ],
+    right: [
+      { x1: 3, x2: 21 },
+      { x1: 9, x2: 21 },
+      { x1: 7, x2: 21 },
+    ],
+    justify: [
+      { x1: 3, x2: 21 },
+      { x1: 3, x2: 21 },
+      { x1: 3, x2: 21 },
+    ],
+  }
+  const ys = [6, 12, 18]
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {lines[align].map((l, i) => (
+        <line key={i} x1={l.x1} x2={l.x2} y1={ys[i]} y2={ys[i]} />
+      ))}
     </svg>
   )
 }
@@ -669,18 +702,22 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
 
             <div className="editor-toolbar-divider" />
 
-            <div className="editor-align-group">
-              {ALIGN_OPTIONS.map((a) => (
+            {(() => {
+              const rawAlign = textFocus?.fields.align
+              const currentAlign: AlignValue = ALIGN_OPTIONS.includes(rawAlign as AlignValue) ? (rawAlign as AlignValue) : 'left'
+              const nextAlign = ALIGN_OPTIONS[(ALIGN_OPTIONS.indexOf(currentAlign) + 1) % ALIGN_OPTIONS.length]
+              const label = currentAlign.charAt(0).toUpperCase() + currentAlign.slice(1)
+              return (
                 <button
-                  key={a}
-                  className={`editor-toggle-btn${textFocus?.fields.align === a ? ' is-active' : ''}`}
-                  onClick={() => sendFormatSet('align', a)}
-                  title={a}
+                  className="editor-toggle-btn"
+                  onClick={() => sendFormatSet('align', nextAlign)}
+                  title={`Align: ${label}`}
+                  aria-label={`Align: ${label}`}
                 >
-                  {a[0].toUpperCase()}
+                  <AlignIcon align={currentAlign} />
                 </button>
-              ))}
-            </div>
+              )
+            })()}
           </div>
           )}
 

@@ -5001,7 +5001,7 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
             return {
                 fontFamily: null, fontSize: null, fontWeight: null, color: null,
                 align: null, bold: false, italic: false, underline: false,
-                strikethrough: false, uppercase: false,
+                strikethrough: false, uppercase: null,
                 x: null, y: null, width: null, height: null
             };
         }
@@ -5103,7 +5103,8 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                     const decoration = el.style.textDecoration || '';
                     style.underline = decoration.indexOf('underline') !== -1;
                     style.strikethrough = decoration.indexOf('line-through') !== -1;
-                    style.uppercase = el.style.textTransform === 'uppercase';
+                    if (el.style.textTransform === 'uppercase') style.uppercase = true;
+                    else if (el.style.textTransform === 'none') style.uppercase = false;
                     if (el.style.position === 'absolute') {
                         style.x = parseFloat(el.style.left) || 0;
                         style.y = parseFloat(el.style.top) || 0;
@@ -5142,7 +5143,13 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 if (style.underline) decorations.push('underline');
                 if (style.strikethrough) decorations.push('line-through');
                 el.style.textDecoration = decorations.length ? decorations.join(' ') : '';
-                el.style.textTransform = style.uppercase ? 'uppercase' : '';
+                // Unlike the other fields, uppercase is tri-state (see textStyleDefaults):
+                // null means "inherit the theme's own text-transform", but false must
+                // still force 'none' - otherwise unchecking the toolbar's Uppercase
+                // toggle on a theme whose title/body is uppercase by default (e.g.
+                // Bold Signal) would have no visible effect, since clearing the inline
+                // override just lets that same theme rule win again.
+                el.style.textTransform = style.uppercase === true ? 'uppercase' : style.uppercase === false ? 'none' : '';
 
                 // Free-position/size override (move/resize handles below). Only ever
                 // set once the user has dragged/resized this element at least once -
