@@ -7,24 +7,10 @@ import { AUTO_THEME_SLUG, AI_CUSTOM_THEME_SLUG } from '@/utils/themeMetadata'
 import { analyzeSermon, type SermonAnalysis } from '@/utils/sermonAnalyzer'
 import { sanitizeCustomTheme } from '@/utils/aiThemeSanitizer'
 import { AI_THEME_SYSTEM_PROMPT, buildAiThemeUserPrompt, parseJsonLoosely } from '@/utils/aiThemePrompt'
+import { getAiThemeProviders } from '@/utils/aiThemeProviders'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { after } from 'next/server'
-
-// Verified live against GET /v1beta/models — 'gemini-pro-latest' resolves to
-// gemini-3.1-pro, which has zero free-tier quota on this account (429,
-// limit: 0). 'gemini-flash-latest' has real free-tier quota and produces
-// genuinely content-specific designs (tested against a real sermon: correctly
-// picked up wilderness/fire imagery from Numbers 11 rather than defaulting to
-// a generic palette).
-const AI_THEME_MODEL = 'gemini-flash-latest'
-const AI_THEME_MAX_ATTEMPTS = 3
-// Gemini Flash responded in ~20s in testing, well under this — the ceiling is
-// headroom for a slow day, not the expected case.
-const AI_THEME_ATTEMPT_TIMEOUT_MS = 60_000
-// Longer than a typical inter-attempt delay: free-tier 429s came back with a
-// server-suggested "retry in ~45s", so a short backoff would just fail again.
-const AI_THEME_RETRY_DELAY_MS = 15_000
 
 export async function createSermon(rawNotes: string) {
   const supabase = await createClient()
@@ -184,96 +170,78 @@ export async function generatePreviews(sermonId: string) {
   }
 }
 
+// One saved AI design, as shown in the design-history dropdown.
+export type AiThemeDesignSummary = {
+  id: string
+  name: string
+  createdAt: string
+  previewHtml: string
+}
+
 // Polled by the client while a background generation is in flight.
 type AiThemeStatusResult =
   | { status: 'idle' | 'pending' }
-  | { status: 'ready'; customTheme: CustomThemeData; previewHtml: string }
+  | {
+      status: 'ready'
+      customTheme: CustomThemeData
+      previewHtml: string
+      designs: AiThemeDesignSummary[]
+      activeDesignId: string | null
+    }
   | { status: 'failed'; error: string; fallbackSlug: string; fallbackPreviewHtml: string }
 
-// Single attempt: call Google AI Studio (Gemini), parse, sanitize. Returns the
-// safe theme or throws with a user-facing message — the retry loop in
-// runAiThemeGeneration decides whether to try again or give up.
+// Walks the configured providers in order (see aiThemeProviders.ts) and
+// returns the first usable design. A provider that errors, times out, or
+// returns something that fails to parse/sanitize is skipped in favor of the
+// next one — only when every provider has failed does this throw, with the
+// last provider's error message.
 async function requestAiTheme(title: string, analysis: SermonAnalysis, rawNotes: string): Promise<CustomThemeData> {
-  const apiKey = process.env.GOOGLE_AI_STUDIO_API_KEY
-  if (!apiKey) {
+  const providers = getAiThemeProviders()
+  if (providers.length === 0) {
     throw new Error('AI design generation is not configured.')
   }
 
   const userPrompt = buildAiThemeUserPrompt(title, analysis, rawNotes)
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), AI_THEME_ATTEMPT_TIMEOUT_MS)
-  let res: Response
-  try {
-    res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${AI_THEME_MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: AI_THEME_SYSTEM_PROMPT }] },
-          contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-          generationConfig: {
-            temperature: 0.9,
-            // gemini-flash-latest is a thinking model — reasoning tokens are
-            // billed against maxOutputTokens too. Verified live: with no cap,
-            // a single request spent 3840 of a 4000 budget on hidden thinking
-            // and left ~150 for the actual theme, truncating it mid-response
-            // and surfacing as "Could not understand the AI design response."
-            // Capping thinking + raising the ceiling fixed it in the same repro.
-            maxOutputTokens: 8000,
-            thinkingConfig: { thinkingBudget: 512 },
-            responseMimeType: 'application/json',
-          },
-        }),
+  // Records every provider's failure, not just the last one — otherwise a
+  // fixable problem with an earlier provider (wrong model slug, missing
+  // billing, etc.) is invisible once a later provider also fails, since only
+  // the final error would ever surface.
+  const failures: string[] = []
+  for (const provider of providers) {
+    try {
+      const content = await provider.run(AI_THEME_SYSTEM_PROMPT, userPrompt)
+
+      const parsed = parseJsonLoosely(content)
+      if (!parsed) {
+        throw new Error(`Could not understand ${provider.label}'s response.`)
       }
-    )
-  } catch (err) {
-    const timedOut = err instanceof Error && err.name === 'AbortError'
-    throw new Error(timedOut ? 'AI design generation timed out.' : 'Could not reach the AI design service.')
-  } finally {
-    clearTimeout(timeout)
-  }
 
-  if (!res.ok) {
-    // 429 (free-tier quota) is transient and worth retrying; the message
-    // deliberately avoids "service returned an error" so the retry loop
-    // below doesn't treat it as permanent.
-    if (res.status === 429) {
-      throw new Error('AI design service is rate-limited — retrying shortly.')
+      const safe = sanitizeCustomTheme(parsed)
+      if (!safe) {
+        throw new Error(`${provider.label}'s design did not pass safety checks.`)
+      }
+
+      return safe
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error.'
+      failures.push(`${provider.label}: ${message}`)
+      console.error(`[ai-theme] ${provider.label} failed:`, message)
     }
-    throw new Error(`AI design service returned an error (${res.status}).`)
   }
 
-  const json = await res.json()
-  const content = json?.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!content) {
-    throw new Error('AI design service returned an empty response.')
-  }
-
-  const parsed = parseJsonLoosely(content)
-  if (!parsed) {
-    throw new Error('Could not understand the AI design response.')
-  }
-
-  const safe = sanitizeCustomTheme(parsed)
-  if (!safe) {
-    throw new Error('The AI design did not pass safety checks.')
-  }
-
-  return safe
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  throw new Error(`All AI design providers failed. ${failures.join(' | ')}`)
 }
 
 // Runs in the background via after() — outside the request/response cycle, so
-// it can take as long as the free model needs (up to AI_THEME_ATTEMPT_TIMEOUT_MS
-// per attempt) without blocking the click that started it. Retries a few times
-// before giving up, since a single bad/slow attempt is common but rarely
-// repeats across all attempts.
+// it can take as long as the providers need without blocking the click that
+// started it. requestAiTheme already falls through every configured provider,
+// so a single call here is the full attempt.
+//
+// A successful design is INSERTed into ai_theme_designs, never overwritten —
+// presentations.custom_theme/active_ai_design_id just point at whichever row
+// is current. That's what lets a later "Regenerate" get undone via the design
+// history dropdown without spending tokens to reproduce the earlier design.
 async function runAiThemeGeneration(sermonId: string) {
   const supabase = await createClient()
 
@@ -290,29 +258,27 @@ async function runAiThemeGeneration(sermonId: string) {
   const title = sermon.title || 'Untitled Sermon'
   const analysis = analyzeSermon(rawNotes)
 
-  let lastError = 'AI design generation failed.'
-  for (let attempt = 1; attempt <= AI_THEME_MAX_ATTEMPTS; attempt++) {
-    try {
-      const safe = await requestAiTheme(title, analysis, rawNotes)
-      await supabase
-        .from('presentations')
-        .update({ custom_theme: safe, ai_theme_status: 'ready', ai_theme_error: null })
-        .eq('id', presentation.id)
-      revalidatePath(`/sermons/${sermonId}/generate`)
-      return
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : lastError
-      // A missing API key or an HTTP-level service error won't fix itself on
-      // retry — only malformed-output/timeout failures are worth repeating.
-      if (/not configured|service returned an error/.test(lastError)) break
-      if (attempt < AI_THEME_MAX_ATTEMPTS) await delay(AI_THEME_RETRY_DELAY_MS)
+  try {
+    const safe = await requestAiTheme(title, analysis, rawNotes)
+    const { data: design, error: designError } = await supabase
+      .from('ai_theme_designs')
+      .insert({ presentation_id: presentation.id, custom_theme: safe })
+      .select('id')
+      .single()
+    if (designError || !design) {
+      throw new Error(designError?.message || 'Failed to save the AI design.')
     }
+    await supabase
+      .from('presentations')
+      .update({ custom_theme: safe, active_ai_design_id: design.id, ai_theme_status: 'ready', ai_theme_error: null })
+      .eq('id', presentation.id)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'AI design generation failed.'
+    await supabase
+      .from('presentations')
+      .update({ ai_theme_status: 'failed', ai_theme_error: message })
+      .eq('id', presentation.id)
   }
-
-  await supabase
-    .from('presentations')
-    .update({ ai_theme_status: 'failed', ai_theme_error: lastError })
-    .eq('id', presentation.id)
   revalidatePath(`/sermons/${sermonId}/generate`)
 }
 
@@ -383,7 +349,8 @@ export async function getAiThemeStatus(sermonId: string): Promise<AiThemeStatusR
         fallbackPreviewHtml: generatePreviewHtml(analysis.themeSlug, firstSlideText),
       }
     }
-    return { status: 'ready', customTheme: safe, previewHtml: generatePreviewHtml(safe, firstSlideText) }
+    const { designs, activeDesignId } = await getAiThemeDesigns(sermonId)
+    return { status: 'ready', customTheme: safe, previewHtml: generatePreviewHtml(safe, firstSlideText), designs, activeDesignId }
   }
 
   if (status === 'failed') {
@@ -397,6 +364,106 @@ export async function getAiThemeStatus(sermonId: string): Promise<AiThemeStatusR
   }
 
   return { status }
+}
+
+// Every AI design ever generated for this presentation, newest first, plus which
+// one is currently active — feeds the design-history dropdown so switching back
+// to an earlier design costs a click, not another round of LLM calls.
+export async function getAiThemeDesigns(
+  sermonId: string
+): Promise<{ designs: AiThemeDesignSummary[]; activeDesignId: string | null }> {
+  const supabase = await createClient()
+
+  const { data: sermon, error: sermonError } = await supabase
+    .from('sermons')
+    .select('*, slides(*), presentations(*)')
+    .eq('id', sermonId)
+    .single()
+
+  if (sermonError || !sermon) {
+    throw new Error('Sermon not found')
+  }
+  const presentation = sermon.presentations?.[0]
+  if (!presentation) {
+    throw new Error('Presentation not found')
+  }
+
+  const { data: rows, error } = await supabase
+    .from('ai_theme_designs')
+    .select('id, custom_theme, created_at')
+    .eq('presentation_id', presentation.id)
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    throw new Error(error.message)
+  }
+
+  const firstSlideText = sermon.slides?.[0]?.content || sermon.title || 'Untitled Sermon'
+
+  const designs: AiThemeDesignSummary[] = (rows || []).flatMap((row) => {
+    const safe = sanitizeCustomTheme(row.custom_theme)
+    if (!safe) return []
+    return [{
+      id: row.id as string,
+      name: safe.name,
+      createdAt: row.created_at as string,
+      previewHtml: generatePreviewHtml(safe, firstSlideText),
+    }]
+  })
+
+  return { designs, activeDesignId: presentation.active_ai_design_id ?? null }
+}
+
+// Switches the active AI design to a previously-generated one from the history
+// dropdown. Pure bookkeeping — the design already exists in ai_theme_designs,
+// so this never calls an LLM.
+export async function selectAiThemeDesign(
+  sermonId: string,
+  designId: string
+): Promise<{ customTheme: CustomThemeData; previewHtml: string }> {
+  const supabase = await createClient()
+
+  const { data: sermon, error: sermonError } = await supabase
+    .from('sermons')
+    .select('*, slides(*), presentations(*)')
+    .eq('id', sermonId)
+    .single()
+
+  if (sermonError || !sermon) {
+    throw new Error('Sermon not found')
+  }
+  const presentation = sermon.presentations?.[0]
+  if (!presentation) {
+    throw new Error('Presentation not found')
+  }
+
+  // Scoped to this presentation_id so a design id from another presentation
+  // (even one the same user owns) can never be adopted here.
+  const { data: design, error: designError } = await supabase
+    .from('ai_theme_designs')
+    .select('id, custom_theme')
+    .eq('id', designId)
+    .eq('presentation_id', presentation.id)
+    .single()
+
+  if (designError || !design) {
+    throw new Error('Saved design not found')
+  }
+
+  const safe = sanitizeCustomTheme(design.custom_theme)
+  if (!safe) {
+    throw new Error('This saved design is no longer valid.')
+  }
+
+  await supabase
+    .from('presentations')
+    .update({ custom_theme: safe, active_ai_design_id: design.id, ai_theme_status: 'ready', ai_theme_error: null })
+    .eq('id', presentation.id)
+
+  revalidatePath(`/sermons/${sermonId}/generate`)
+
+  const firstSlideText = sermon.slides?.[0]?.content || sermon.title || 'Untitled Sermon'
+  return { customTheme: safe, previewHtml: generatePreviewHtml(safe, firstSlideText) }
 }
 
 // Select a theme, generate the full presentation and store it.

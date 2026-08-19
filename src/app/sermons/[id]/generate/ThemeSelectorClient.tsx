@@ -2,7 +2,13 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { selectThemeAndGenerateDeck, generateAiCustomTheme, getAiThemeStatus } from '@/app/sermons/actions'
+import {
+  selectThemeAndGenerateDeck,
+  generateAiCustomTheme,
+  getAiThemeStatus,
+  selectAiThemeDesign,
+  type AiThemeDesignSummary,
+} from '@/app/sermons/actions'
 import {
   THEME_META,
   THEME_META_BY_SLUG,
@@ -14,6 +20,7 @@ import {
 } from '@/utils/themeMetadata'
 import type { SermonAnalysis } from '@/utils/sermonAnalyzer'
 import type { CustomThemeData } from '@/utils/slideTemplates'
+import { SwatchIcon, BookIcon, SparkleIcon, RefreshIcon, ClockIcon } from '@/components/icons'
 
 function PreviewFrame({ html, title }: { html: string; title: string }) {
   if (!html) {
@@ -23,7 +30,7 @@ function PreviewFrame({ html, title }: { html: string; title: string }) {
         alignItems: 'center', justifyContent: 'center', padding: '1.5rem', textAlign: 'center',
         color: '#f4f4f5', // this canvas is a fixed dark placeholder (see rgba(0,0,0,0.5) at call sites), not app chrome
       }}>
-        <span style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>🎨</span>
+        <span style={{ marginBottom: '0.5rem', opacity: 0.8 }}><SwatchIcon size={26} /></span>
         <strong style={{ fontSize: '1.05rem' }}>{title}</strong>
       </div>
     )
@@ -51,13 +58,130 @@ function Chip({ children, tone = 'muted' }: { children: React.ReactNode; tone?: 
       letterSpacing: '0.03em',
       padding: '0.25rem 0.7rem',
       borderRadius: '999px',
-      background: tone === 'accent' ? 'rgba(245, 158, 11, 0.15)' : 'var(--bg-surface-hover)',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '0.35rem',
+      background: tone === 'accent' ? 'var(--accent-glow)' : 'var(--bg-surface-hover)',
       color: tone === 'accent' ? 'var(--accent)' : 'var(--text-secondary)',
-      border: `1px solid ${tone === 'accent' ? 'rgba(245,158,11,0.35)' : 'var(--border-color)'}`,
+      border: `1px solid ${tone === 'accent' ? 'var(--border-color)' : 'var(--border-color)'}`,
       whiteSpace: 'nowrap',
     }}>
       {children}
     </span>
+  )
+}
+
+function formatRelativeTime(iso: string): string {
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+// Compact "N saved designs ▾" button next to Regenerate. Opening it lists every
+// design ever generated for this presentation — clicking one activates it
+// immediately (no LLM call), the way selectAiThemeDesign works server-side.
+function AiDesignHistoryDropdown({
+  designs,
+  activeDesignId,
+  onSelect,
+  disabled,
+}: {
+  designs: AiThemeDesignSummary[]
+  activeDesignId: string | null
+  onSelect: (design: AiThemeDesignSummary) => void
+  disabled: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open])
+
+  if (designs.length === 0) return null
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
+        disabled={disabled}
+        className={`btn btn-secondary ${disabled ? 'btn-disabled' : ''}`}
+        style={{ fontSize: '0.9rem', padding: '0.6rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}
+      >
+        <ClockIcon size={14} />
+        {designs.length} saved design{designs.length === 1 ? '' : 's'}
+        <span style={{ fontSize: '0.7rem' }}>▾</span>
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute', top: 'calc(100% + 0.5rem)', left: 0, zIndex: 20,
+            width: '270px', background: 'var(--bg-surface)', border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius-md)', boxShadow: '0 12px 28px rgba(0,0,0,0.35)', overflow: 'hidden',
+          }}
+        >
+          {designs.map((design) => {
+            const isActive = design.id === activeDesignId
+            return (
+              <button
+                key={design.id}
+                type="button"
+                role="option"
+                aria-selected={isActive}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setOpen(false)
+                  if (!isActive) onSelect(design)
+                }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '0.65rem', width: '100%',
+                  padding: '0.6rem 0.75rem', border: 'none', borderBottom: '1px solid var(--border-color)',
+                  background: isActive ? 'var(--accent-glow)' : 'transparent',
+                  cursor: 'pointer', textAlign: 'left', font: 'inherit', color: 'inherit',
+                }}
+              >
+                <span style={{
+                  position: 'relative', width: '42px', height: '26px', borderRadius: '5px',
+                  overflow: 'hidden', flexShrink: 0, border: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.5)',
+                }}>
+                  <PreviewFrame html={design.previewHtml} title={design.name} />
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{
+                    display: 'block', fontSize: '0.82rem', fontWeight: 600,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {design.name}
+                  </span>
+                  <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                    {isActive ? 'Active · ' : ''}{formatRelativeTime(design.createdAt)}
+                  </span>
+                </span>
+                {isActive && <span style={{ color: 'var(--accent)', fontSize: '0.9rem', flexShrink: 0 }}>✓</span>}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -77,6 +201,8 @@ interface Props {
   initialCustomThemePreview: string | null
   initialAiThemeStatus: AiThemeStatus
   initialAiThemeError: string | null
+  initialAiThemeDesigns: AiThemeDesignSummary[]
+  initialActiveAiDesignId: string | null
 }
 
 const AI_THEME_POLL_INTERVAL_MS = 3000
@@ -90,6 +216,8 @@ export default function ThemeSelectorClient({
   initialCustomThemePreview,
   initialAiThemeStatus,
   initialAiThemeError,
+  initialAiThemeDesigns,
+  initialActiveAiDesignId,
 }: Props) {
   const [selected, setSelected] = useState<string>(defaultSelected || AUTO_THEME_SLUG)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -101,6 +229,10 @@ export default function ThemeSelectorClient({
   const [aiPreviewHtml, setAiPreviewHtml] = useState<string | null>(initialCustomThemePreview)
   const [aiStatus, setAiStatus] = useState<AiThemeStatus>(initialAiThemeStatus)
   const [aiError, setAiError] = useState<string | null>(initialAiThemeError)
+  const [aiThemeDesigns, setAiThemeDesigns] = useState<AiThemeDesignSummary[]>(initialAiThemeDesigns)
+  const [activeAiDesignId, setActiveAiDesignId] = useState<string | null>(initialActiveAiDesignId)
+  const [historySelecting, setHistorySelecting] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const aiLoading = aiStatus === 'pending'
@@ -147,6 +279,8 @@ export default function ThemeSelectorClient({
           setAiStatus('ready')
           setAiError(null)
           setSelected(AI_CUSTOM_THEME_SLUG)
+          setAiThemeDesigns(res.designs)
+          setActiveAiDesignId(res.activeDesignId)
           return
         }
         if (res.status === 'failed') {
@@ -190,6 +324,25 @@ export default function ThemeSelectorClient({
     } catch (err) {
       setAiError(err instanceof Error ? err.message : 'Failed to start AI design generation.')
       setAiStatus('failed')
+    }
+  }
+
+  // Switches to a design already sitting in ai_theme_designs — no LLM call.
+  const handleSelectAiDesign = async (design: AiThemeDesignSummary) => {
+    setHistorySelecting(true)
+    setHistoryError(null)
+    try {
+      const res = await selectAiThemeDesign(sermonId, design.id)
+      setAiCustomTheme(res.customTheme)
+      setAiPreviewHtml(res.previewHtml)
+      setActiveAiDesignId(design.id)
+      setAiStatus('ready')
+      setAiError(null)
+      setSelected(AI_CUSTOM_THEME_SLUG)
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : 'Failed to switch to that design.')
+    } finally {
+      setHistorySelecting(false)
     }
   }
 
@@ -238,7 +391,7 @@ export default function ThemeSelectorClient({
           padding: '2rem',
           borderRadius: 'var(--radius-lg)',
           border: isAiSelected ? '2px solid var(--accent)' : '1px solid var(--border-color)',
-          boxShadow: isAiSelected ? '0 0 30px rgba(245, 158, 11, 0.22)' : 'none',
+          boxShadow: isAiSelected ? '0 4px 14px var(--accent-glow)' : 'none',
           transition: 'all 0.25s ease',
           display: 'grid',
           gridTemplateColumns: 'minmax(0, 1fr) minmax(240px, 340px)',
@@ -257,7 +410,10 @@ export default function ThemeSelectorClient({
             }}>
               {isAiSelected ? '✓' : ''}
             </span>
-            <h3 style={{ fontSize: '1.4rem', fontWeight: 700 }}>✨ Let AI design something new for this sermon</h3>
+            <h3 style={{ fontSize: '1.4rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+              <SparkleIcon size={20} />
+              Let AI design something new for this sermon
+            </h3>
             <Chip tone="accent">Bespoke</Chip>
           </div>
 
@@ -269,7 +425,8 @@ export default function ThemeSelectorClient({
           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
             {analysis.scripture.slice(0, 3).map((r) => (
               <Chip key={`${r.book}${r.location ?? ''}`}>
-                📖 {r.book}{r.location ? ` ${r.location}` : ''}
+                <BookIcon size={11} />
+                {r.book}{r.location ? ` ${r.location}` : ''}
               </Chip>
             ))}
             {analysis.genres.slice(0, 1).map((g) => <Chip key={g}>{GENRE_LABELS[g]}</Chip>)}
@@ -285,19 +442,40 @@ export default function ThemeSelectorClient({
                 : 'Not generated yet — click below to design it.'}
           </div>
 
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); handleGenerateAiTheme() }}
-            disabled={aiLoading}
-            className={`btn btn-secondary ${aiLoading ? 'btn-disabled' : ''}`}
-            style={{ fontSize: '0.9rem', padding: '0.6rem 1.25rem' }}
-          >
-            {aiLoading ? '⚡ Designing…' : aiCustomTheme ? '🔄 Regenerate AI design' : '✨ Generate AI design'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={handleGenerateAiTheme}
+              disabled={aiLoading}
+              className={`btn btn-secondary ${aiLoading ? 'btn-disabled' : ''}`}
+              style={{ fontSize: '0.9rem', padding: '0.6rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}
+            >
+              {aiLoading ? (
+                'Designing…'
+              ) : aiCustomTheme ? (
+                <><RefreshIcon size={14} /> Regenerate AI design</>
+              ) : (
+                <><SparkleIcon size={14} /> Generate AI design</>
+              )}
+            </button>
+
+            <AiDesignHistoryDropdown
+              designs={aiThemeDesigns}
+              activeDesignId={activeAiDesignId}
+              onSelect={handleSelectAiDesign}
+              disabled={aiLoading || historySelecting}
+            />
+          </div>
 
           {aiError && (
             <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--danger)' }}>
               {aiError} — showing the closest catalog match instead.
+            </div>
+          )}
+
+          {historyError && (
+            <div style={{ marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--danger)' }}>
+              {historyError}
             </div>
           )}
         </div>
@@ -362,7 +540,7 @@ export default function ThemeSelectorClient({
                   cursor: 'pointer', display: 'flex', flexDirection: 'column',
                   borderRadius: 'var(--radius-lg)', overflow: 'hidden',
                   border: isSelected ? '2px solid var(--accent)' : '1px solid var(--border-color)',
-                  boxShadow: isSelected ? '0 0 25px rgba(245, 158, 11, 0.25)' : 'none',
+                  boxShadow: isSelected ? '0 4px 14px var(--accent-glow)' : 'none',
                   transform: isSelected ? 'translateY(-4px)' : 'none',
                   transition: 'all 0.25s ease', position: 'relative'
                 }}
@@ -380,7 +558,7 @@ export default function ThemeSelectorClient({
                 {isRecommended && (
                   <div style={{
                     position: 'absolute', top: '0.85rem', left: '0.85rem', zIndex: 10,
-                    background: 'var(--accent)', color: '#1a1a1a', fontSize: '0.65rem',
+                    background: 'var(--accent)', color: '#1e1b4b', fontSize: '0.65rem',
                     fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase',
                     padding: '0.25rem 0.6rem', borderRadius: '999px'
                   }}>
@@ -461,7 +639,7 @@ export default function ThemeSelectorClient({
           className={`btn btn-accent ${isGenerating ? 'btn-disabled' : ''}`}
           style={{ padding: '1rem 2.5rem', fontSize: '1.1rem' }}
         >
-          {isGenerating ? '⚡ Generating Presentation...' : '✨ Generate Presentation Deck'}
+          {isGenerating ? 'Generating Presentation…' : 'Generate Presentation Deck'}
         </button>
       </div>
     </div>

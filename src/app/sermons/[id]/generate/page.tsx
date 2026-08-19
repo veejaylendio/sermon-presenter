@@ -5,7 +5,9 @@ import { generatePreviewHtml, type CustomThemeData } from '@/utils/slideTemplate
 import { THEME_META, AUTO_THEME_SLUG, AI_CUSTOM_THEME_SLUG } from '@/utils/themeMetadata'
 import { analyzeSermon } from '@/utils/sermonAnalyzer'
 import { sanitizeCustomTheme } from '@/utils/aiThemeSanitizer'
+import { getAiThemeDesigns, type AiThemeDesignSummary } from '@/app/sermons/actions'
 import Link from 'next/link'
+import { SwatchIcon } from '@/components/icons'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,21 +74,44 @@ export default async function GeneratePage({ params }: PageProps) {
     presentation?.ai_theme_status || 'idle'
   const initialAiThemeError: string | null = presentation?.ai_theme_error || null
 
+  // History of every AI design generated for this presentation, so the
+  // design-history dropdown has data on first paint without an extra round-trip.
+  let initialAiThemeDesigns: AiThemeDesignSummary[] = []
+  let initialActiveAiDesignId: string | null = null
+  if (presentation) {
+    try {
+      const result = await getAiThemeDesigns(id)
+      initialAiThemeDesigns = result.designs
+      initialActiveAiDesignId = result.activeDesignId
+    } catch {
+      // No saved designs yet — the dropdown just won't render.
+    }
+  }
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <header className="glass" style={{ borderBottom: '1px solid var(--border-color)', padding: '1rem 0' }}>
+      <header className="glass" style={{ position: 'sticky', top: 0, zIndex: 100, borderBottom: '1px solid var(--border-color)', padding: '1rem 0' }}>
         <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <Link href="/sermons" style={{ color: 'var(--text-secondary)', fontWeight: '500' }}>
               ← Dashboard
             </Link>
             <span style={{ color: 'var(--text-muted)' }}>|</span>
-            <span style={{ fontSize: '1.25rem', fontWeight: 'bold', fontFamily: 'var(--font-serif)' }}>
+            <span style={{ fontSize: '1.25rem', fontWeight: 'bold', fontFamily: 'var(--font-serif)', color: 'var(--primary)' }}>
               {sermon.title}
             </span>
           </div>
-          <span className="badge badge-accent">frontend-slides AI engine</span>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+            fontSize: '0.72rem', fontWeight: 600, letterSpacing: '0.03em',
+            padding: '0.35rem 0.8rem', borderRadius: 'var(--radius-full)',
+            background: 'var(--accent-glow)', color: 'var(--accent)',
+            border: '1px solid var(--border-color)',
+          }}>
+            <SwatchIcon size={13} />
+            frontend-slides AI engine
+          </span>
         </div>
       </header>
 
@@ -94,11 +119,11 @@ export default async function GeneratePage({ params }: PageProps) {
       <main style={{ flex: 1, padding: '3rem 0' }}>
         <div className="container" style={{ maxWidth: '1200px' }}>
           <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
-            <h1 style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>
+            <h1 className="animate-fade-in" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>
               Choose a Presentation Style
             </h1>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '1.125rem', maxWidth: '700px', margin: '0 auto' }}>
-              Powered by <code style={{ color: 'var(--accent)', background: 'rgba(245, 158, 11, 0.1)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>@frontend-slides</code>. Let AI read your sermon and choose the design, or pick from {THEME_META.length} styles yourself.
+            <p style={{ color: 'var(--text-secondary)', fontSize: '1.125rem', maxWidth: '700px', margin: '0 auto', lineHeight: 1.6 }}>
+              Powered by <code style={{ color: 'var(--accent)', background: 'var(--accent-glow)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>@frontend-slides</code>. Let AI read your sermon and choose the design, or pick from {THEME_META.length} styles yourself.
             </p>
           </div>
 
@@ -111,6 +136,8 @@ export default async function GeneratePage({ params }: PageProps) {
             initialCustomThemePreview={initialCustomThemePreview}
             initialAiThemeStatus={initialAiThemeStatus}
             initialAiThemeError={initialAiThemeError}
+            initialAiThemeDesigns={initialAiThemeDesigns}
+            initialActiveAiDesignId={initialActiveAiDesignId}
           />
         </div>
       </main>

@@ -11,6 +11,22 @@ const HTML_TAG_IN_CSS = /<\/?[a-z][\s\S]*>/i
 const BANNED_WORDS = /\b(custom|wildcard|ai[- ]?generated)\b/i
 const ALLOWED_FONT_HOSTS = /^https:\/\/(fonts\.googleapis\.com|fonts\.gstatic\.com|api\.fontshare\.com)\//i
 
+// The system prompt tells the model every body/scripture text must be at
+// least 32px at the fixed 1920x1080 stage, but that's only an instruction —
+// smaller open-weight fallback models (unlike the tested Gemini path) have
+// been observed ignoring it and shipping ~24-29px text. Enforce it for real:
+// reject any theme with a font-size below the floor anywhere in its CSS or
+// templates, so it falls through to the next provider instead of shipping an
+// illegible deck.
+const MIN_FONT_SIZE_PX = 32
+
+function hasFontSizeBelowFloor(text: string): boolean {
+  for (const match of text.matchAll(/font-size\s*:\s*(\d+(?:\.\d+)?)\s*px/gi)) {
+    if (parseFloat(match[1]) < MIN_FONT_SIZE_PX) return true
+  }
+  return false
+}
+
 // The renderer (applyCustomTemplate in slideTemplates.ts) only understands two
 // section tags, {{#HEADER}}/{{/HEADER}} and {{#BODY}}/{{/BODY}}. Any other
 // {{#tag}} / {{/tag}} — a hallucinated block, a typo, an unmatched open/close —
@@ -47,6 +63,7 @@ export function sanitizeCustomTheme(raw: unknown): CustomThemeData | null {
     return null
   }
   if (HTML_TAG_IN_CSS.test(css)) return null
+  if (hasFontSizeBelowFloor(css) || hasFontSizeBelowFloor(titleTpl) || hasFontSizeBelowFloor(bodyTpl)) return null
   if (BANNED_WORDS.test(titleTpl) || BANNED_WORDS.test(bodyTpl) || BANNED_WORDS.test(name)) return null
   if (UNSUPPORTED_SECTION_TAG.test(titleTpl) || UNSUPPORTED_SECTION_TAG.test(bodyTpl)) return null
   if (!hasBalancedSections(titleTpl) || !hasBalancedSections(bodyTpl)) return null

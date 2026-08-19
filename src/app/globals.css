@@ -63,7 +63,7 @@ body {
   max-width: 100vw;
   width: 100%;
   height: 100%;
-  overflow-x: hidden;
+  overflow: hidden;
   color-scheme: light;
 }
 
@@ -666,9 +666,10 @@ a {
 /* App Shell — icon rail + topbar wrapping /sermons, /themes, /settings.
    Flat white/black, no blur, matching the rest of this restyle. */
 .shell-root {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-columns: 76px 1fr;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .shell-rail {
@@ -678,9 +679,8 @@ a {
   align-items: center;
   padding: 1.25rem 0;
   gap: 0.5rem;
-  position: sticky;
-  top: 0;
-  height: 100vh;
+  height: 100%;
+  overflow-y: auto;
 }
 
 .shell-rail-mark {
@@ -736,6 +736,7 @@ a {
 
 .shell-main {
   min-width: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
 }
@@ -757,18 +758,22 @@ a {
 
 .shell-content {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 2rem;
 }
 
 @media (max-width: 760px) {
-  .shell-root { grid-template-columns: 1fr; }
+  .shell-root { grid-template-columns: 1fr; height: auto; min-height: 100vh; overflow-y: auto; }
   .shell-rail {
     flex-direction: row;
     height: auto;
-    position: static;
+    overflow: visible;
     padding: 0.65rem 1rem;
   }
   .shell-rail-mark { margin-bottom: 0; margin-right: auto; }
   .shell-rail-spacer { display: none; }
+  .shell-main { height: auto; }
+  .shell-content { overflow-y: visible; }
 }
 

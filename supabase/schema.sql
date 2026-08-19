@@ -39,6 +39,20 @@ create table public.presentations (
   shared_at timestamptz
 );
 
+-- Create ai_theme_designs table: every AI-generated design for a presentation,
+-- kept around (not just the latest) so regenerating never burns tokens re-deriving
+-- a design the user already had and might want back.
+create table public.ai_theme_designs (
+  id uuid primary key default gen_random_uuid(),
+  presentation_id uuid references public.presentations(id) on delete cascade not null,
+  custom_theme jsonb not null, -- sanitized CustomThemeData, same shape as presentations.custom_theme
+  created_at timestamptz default now()
+);
+
+-- Which saved design (if any) is currently mirrored into presentations.custom_theme.
+alter table public.presentations
+  add column active_ai_design_id uuid references public.ai_theme_designs(id) on delete set null;
+
 -- Create style_previews table
 create table public.style_previews (
   id uuid primary key default gen_random_uuid(),
@@ -72,6 +86,7 @@ alter table public.profiles enable row level security;
 alter table public.sermons enable row level security;
 alter table public.slides enable row level security;
 alter table public.presentations enable row level security;
+alter table public.ai_theme_designs enable row level security;
 alter table public.style_previews enable row level security;
 alter table public.presentation_slides enable row level security;
 alter table public.presentation_sessions enable row level security;
@@ -127,6 +142,26 @@ create policy "Users can perform CRUD on presentations of their own sermons"
     exists (
       select 1 from public.sermons
       where public.sermons.id = public.presentations.sermon_id
+      and public.sermons.user_id = auth.uid()
+    )
+  );
+
+-- AI_THEME_DESIGNS policies
+create policy "Users can perform CRUD on ai theme designs of their presentations"
+  on public.ai_theme_designs for all
+  using (
+    exists (
+      select 1 from public.presentations
+      join public.sermons on public.presentations.sermon_id = public.sermons.id
+      where public.presentations.id = public.ai_theme_designs.presentation_id
+      and public.sermons.user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1 from public.presentations
+      join public.sermons on public.presentations.sermon_id = public.sermons.id
+      where public.presentations.id = public.ai_theme_designs.presentation_id
       and public.sermons.user_id = auth.uid()
     )
   );
