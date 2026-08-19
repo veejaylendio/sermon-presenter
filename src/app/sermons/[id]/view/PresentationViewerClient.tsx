@@ -6,6 +6,7 @@ import { saveDeckHtml } from '../../actions'
 import { buildDeckSrc } from '@/utils/deckSrc'
 import { detectScreens, windowFeaturesForScreen, pickControllerScreen } from '@/utils/screenPlacement'
 import MonitorSelectDialog from '@/components/MonitorSelectDialog'
+import ExportPptxButton from '@/components/ExportPptxButton'
 
 interface Props {
   sermonId: string
@@ -535,6 +536,26 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
     }
   }
 
+  // PPTX export needs the latest in-progress edits, not whatever was last
+  // auto-saved - flush them out of the iframe and hand the html straight to
+  // the export util (it also gets persisted to storage here, same as
+  // handlePresent, but export itself uses this in-memory copy directly
+  // rather than racing storage's own revalidation to read it back).
+  const flushEditsBeforeExport = useCallback(async () => {
+    const flushedHtml = await waitForFlushedHtml()
+    if (flushedHtml) {
+      try {
+        setSaveStatus('saving')
+        await saveDeckHtml(presentationId, flushedHtml)
+        setSaveStatus('saved')
+      } catch (e) {
+        console.error('Pre-export save failed, exporting last saved version:', e)
+        setSaveStatus('error')
+      }
+    }
+    return flushedHtml ?? undefined
+  }, [waitForFlushedHtml, presentationId])
+
   return (
     <div
       ref={containerRef}
@@ -735,6 +756,13 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
           >
             🎨 Change Style
           </Link>
+          <ExportPptxButton
+            deckUrl={presentationUrl}
+            title={sermonTitle}
+            slideCount={slideCount}
+            beforeExport={flushEditsBeforeExport}
+            className="presenter-control-btn presenter-control-btn-secondary"
+          />
           <button
             onClick={handlePresent}
             disabled={isLaunching}

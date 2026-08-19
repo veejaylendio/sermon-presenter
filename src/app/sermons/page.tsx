@@ -2,7 +2,8 @@ import { createClient } from '@/utils/supabase/server'
 import Link from 'next/link'
 import AppShell from '@/components/AppShell'
 import DeleteSermonButton from '@/components/DeleteSermonButton'
-import { BookIcon, SlidesIcon, CalendarIcon } from '@/components/icons'
+import ExportPptxButton from '@/components/ExportPptxButton'
+import { BookIcon, SlidesIcon, CalendarIcon, EyeIcon } from '@/components/icons'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,7 +35,8 @@ export default async function SermonsPage() {
       presentations (
         id,
         status,
-        theme_slug
+        theme_slug,
+        content_storage_path
       )
     `)
     .order('created_at', { ascending: false })
@@ -197,9 +199,33 @@ export default async function SermonsPage() {
                       <td style={{ padding: '0.9rem 0.5rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
                           {isGenerated ? (
-                            <Link href={`/sermons/${sermon.id}/view`} className="btn btn-secondary" style={{ padding: '0.5rem 1rem', fontSize: '0.82rem' }}>
-                              View
-                            </Link>
+                            <>
+                              <Link
+                                href={`/sermons/${sermon.id}/view`}
+                                className="btn btn-secondary"
+                                style={{
+                                  width: '36px',
+                                  height: '36px',
+                                  padding: 0,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  color: 'var(--text-muted)',
+                                }}
+                                title="View"
+                                aria-label="View"
+                              >
+                                <EyeIcon size={16} />
+                              </Link>
+                              {presentation?.content_storage_path && (
+                                <ExportPptxButton
+                                  deckUrl={presentation.content_storage_path}
+                                  title={sermon.title}
+                                  slideCount={slideCount}
+                                  iconOnly
+                                />
+                              )}
+                            </>
                           ) : (
                             <Link href={`/sermons/${sermon.id}/generate`} className="btn btn-primary" style={{ padding: '0.5rem 1rem', fontSize: '0.82rem' }}>
                               Generate
