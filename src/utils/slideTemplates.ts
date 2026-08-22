@@ -1,4 +1,4 @@
-import { parseSermonNotes } from './sermonParser'
+import { parseSermonNotes, extractSlidePhotoCues } from './sermonParser'
 
 function escapeHtml(str: string): string {
   if (!str) return '';
@@ -38,12 +38,31 @@ export function parseSlideContent(content: string): { header: string; body: stri
     .map(l => normalizePunctuation(l.trim()))
     .filter(l => l.length > 0);
   if (rawLines.length === 0) {
+    // parseSermonNotes already drops blank blocks before they become slides, so
+    // the only way content lands here empty is a slide whose notes were entirely
+    // a photo cue line ("Slide: pic of the cross") - extractSlidePhotoCues strips
+    // that line for the placeholder widget, leaving nothing to title. Render a
+    // blank header rather than a literal "Untitled Slide" caption on screen.
     const trimmed = normalizePunctuation((content || '').trim());
-    return { header: escapeHtml(trimmed || 'Untitled Slide'), body: '' };
+    return { header: escapeHtml(trimmed), body: '' };
   }
   const header = escapeHtml(rawLines[0]);
   const body = rawLines.slice(1).map(escapeHtml).join('\n');
   return { header, body };
+}
+
+// Every theme's renderSlide() already omits the .slide-body <p> when body is
+// empty (`${body ? ... : ''}`), but renders its .slide-title <h1>/<h2>
+// unconditionally - there was never a picture-only slide to omit it for
+// until photo cue lines could consume an entire slide's text (see
+// extractSlidePhotoCues), leaving parseSlideContent's header at ''. Rather
+// than touch that conditional in all 13 themes' renderSlide functions, this
+// runs once on whatever markup they produced and strips the now-empty title
+// tag - every theme reuses the same "slide-title" class for exactly this
+// reason (see BASE_SLIDE_CSS's comment). A no-op whenever the title has
+// real text, since then there's content between the tags, not just whitespace.
+function stripEmptySlideTitle(html: string): string {
+  return html.replace(/<(h[12])\b[^>]*\bclass="slide-title[^"]*"[^>]*>\s*<\/\1>/gi, '');
 }
 
 // Base viewport-base.css contents to be injected in every HTML slide page
@@ -266,6 +285,71 @@ const BASE_SLIDE_CSS = `
     max-width: 1400px;
     color: var(--text-secondary);
     white-space: pre-wrap;
+  }
+`;
+
+// Every theme's .slide-title/.slide-body font-size is a fixed, author-chosen px
+// value - there's no upstream check that a long passage (e.g. a multi-verse
+// scripture quotation entered as one block) actually fits the fixed 1920x1080
+// stage. This runtime pass is the safety net: after the slide's real content is
+// in the DOM and fonts are loaded, shrink .slide-title/.slide-body together
+// (uniformly, so title/body stay proportionate) until the wrapper's content no
+// longer exceeds its box, down to a floor so text never becomes illegibly small.
+// Shared verbatim between generatePreviewHtml and generatePresentationHtml
+// since they're independent template-literal documents, not modules that can
+// import a common helper.
+const SLIDE_FIT_TEXT_JS = `
+  // frontend-slides/SERMON_DESIGN.md legibility floor: body text on a projected
+  // sanctuary slide must never render smaller than 32px at the 1920x1080 design
+  // size ("If content will not fit at those sizes, split the slide. Never shrink
+  // below the floor."). A relative scale factor alone can't guarantee that - a
+  // theme with a smaller authored base size (e.g. 34px) would cross 32px well
+  // before hitting an arbitrary 0.5x floor. FLOOR_PX is the actual guarantee;
+  // MIN_SCALE is just a backstop for themes with a very large base size.
+  var SLIDE_TEXT_FLOOR_PX = 32;
+  function fitSlideText(slideEl) {
+    if (!slideEl) return;
+    var wrapper = slideEl.querySelector('.slide-content-wrapper');
+    if (!wrapper) return;
+    var targets = slideEl.querySelectorAll('.slide-title, .slide-body');
+    if (!targets.length) return;
+    var MIN_SCALE = 0.5;
+    var STEP = 0.05;
+    targets.forEach(function (el) {
+      if (!el.dataset.baseFontSize) {
+        el.dataset.baseFontSize = parseFloat(window.getComputedStyle(el).fontSize);
+      }
+      el.style.fontSize = el.dataset.baseFontSize + 'px';
+    });
+    var scale = 1;
+    var guard = 0;
+    while (wrapper.scrollHeight > wrapper.clientHeight + 1 && scale > MIN_SCALE && guard < 40) {
+      var nextScale = scale - STEP;
+      var hitsFloor = false;
+      targets.forEach(function (el) {
+        var base = parseFloat(el.dataset.baseFontSize);
+        if (base * nextScale < SLIDE_TEXT_FLOOR_PX) hitsFloor = true;
+      });
+      // Stop at the floor rather than crossing it - remaining overflow is a
+      // signal the slide's content needs to be split, not shrunk further.
+      if (hitsFloor) break;
+      scale = nextScale;
+      targets.forEach(function (el) {
+        var base = parseFloat(el.dataset.baseFontSize);
+        el.style.fontSize = Math.max(base * scale, 1) + 'px';
+      });
+      guard++;
+    }
+  }
+  function fitAllSlides() {
+    document.querySelectorAll('.slide').forEach(fitSlideText);
+  }
+  function runFitWhenReady(fn) {
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(fn, fn);
+    } else {
+      fn();
+    }
   }
 `;
 
@@ -1302,10 +1386,11 @@ export function generatePreviewHtml(themeOrCustom: string | CustomThemeData, con
 <body>
     <main class="deck-stage" id="deckStage">
         <section class="slide visible">
-            ${themeConfig.renderSlide(content, true, 0, 1)}
+            ${stripEmptySlideTitle(themeConfig.renderSlide(content, true, 0, 1))}
         </section>
     </main>
     <script>
+        ${SLIDE_FIT_TEXT_JS}
         function setupStageScale() {
             const stage = document.getElementById('deckStage');
             const scale = () => {
@@ -1329,6 +1414,7 @@ export function generatePreviewHtml(themeOrCustom: string | CustomThemeData, con
             }
         }
         setupStageScale();
+        runFitWhenReady(function () { fitSlideText(document.querySelector('.slide')); });
     </script>
 </body>
 </html>`;
@@ -1502,16 +1588,55 @@ const WIDGET_SYSTEM_CSS = `
     width: 100%;
     height: 100%;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     text-align: center;
     padding: 12px;
-    background: rgba(99,102,241,0.06);
-    border: 2px dashed rgba(99,102,241,0.35);
-    color: rgba(60,60,60,0.6);
+    gap: 8px;
+    /* A near-opaque scrim of its own, not just a light tint over whatever's
+       behind it - a seeded placeholder can sit on any theme's slide
+       background (near-black to near-white), and a faint tint left the
+       caption unreadable on dark themes (dark text on dark bg). Deliberately
+       theme-independent, like a photo-upload dropzone, since this box is
+       edit-mode chrome, not themed slide content. */
+    background: rgba(15,15,23,0.6);
+    border: 2px dashed rgba(129,140,248,0.65);
+    color: rgba(255,255,255,0.92);
     font-size: 13px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     box-sizing: border-box;
+}
+.widget-placeholder-icon {
+    width: 28px;
+    height: 28px;
+    color: rgba(165,170,255,0.9);
+}
+.widget-placeholder-icon svg {
+    width: 100%;
+    height: 100%;
+}
+.widget-placeholder-caption {
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.92);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    line-height: 1.3;
+}
+/* A seeded photo placeholder (WidgetManager.seedInitialPhotoWidgets) is sized
+   to fill most of the 1920x1080 stage, not the small 480x240 manual-add
+   default - scale the icon/caption up to match, or they read as a tiny label
+   lost in the middle of a huge dashed box. */
+.slide-widget.widget-seeded-photo .widget-placeholder {
+    gap: 24px;
+}
+.slide-widget.widget-seeded-photo .widget-placeholder-icon {
+    width: 120px;
+    height: 120px;
+}
+.slide-widget.widget-seeded-photo .widget-placeholder-caption {
+    font-size: 42px;
+    max-width: 80%;
 }
 .widget-config-panel {
     position: fixed;
@@ -1852,7 +1977,7 @@ body.mode-present .smart-guides {
 // since this outer literal's own string-escape parsing runs first.
 const SLIDE_SYSTEM_JS = `
 function SlideManager() {
-    this.storageKey = 'sermon_slides_' + window.location.pathname;
+    this.storageKey = deckStorageKey('sermon_slides_');
     this.order = [];
     this.blankSet = {};
     this.nextSeq = 0;
@@ -2719,7 +2844,7 @@ function widgetDefaults(type) {
     }
     if (type === 'photo') {
         return Object.assign(common, {
-            src: '', fit: 'cover', aspectRatio: 'free',
+            src: '', caption: '', fit: 'cover', aspectRatio: 'free',
             brightness: 100, contrast: 100, saturation: 100, blur: 0, grayscale: 0,
             linkAction: 'none', linkUrl: '', lazy: true
         });
@@ -2744,7 +2869,7 @@ function WidgetManager() {
     this.selectedId = null;
     this.nextId = 1;
     this.clipboardWidget = null;
-    this.storageKey = 'sermon_widgets_' + window.location.pathname;
+    this.storageKey = deckStorageKey('sermon_widgets_');
     this.addToggle = document.getElementById('addWidgetToggle');
     this.popover = document.getElementById('widgetPopover');
     this.panel = document.getElementById('widgetConfigPanel');
@@ -3083,7 +3208,18 @@ WidgetManager.prototype.buildInner = function (widget) {
         } else {
             inner = document.createElement('div');
             inner.className = 'widget-placeholder';
-            inner.textContent = 'Click to set image source';
+            if (widget.caption) {
+                var icon = document.createElement('div');
+                icon.className = 'widget-placeholder-icon';
+                icon.innerHTML = WIDGET_ICONS.photo;
+                var label = document.createElement('div');
+                label.className = 'widget-placeholder-caption';
+                label.textContent = widget.caption;
+                inner.appendChild(icon);
+                inner.appendChild(label);
+            } else {
+                inner.textContent = 'Click to set image source';
+            }
         }
     } else if (widget.type === 'video') {
         if (widget.src) {
@@ -3160,7 +3296,7 @@ WidgetManager.prototype.refreshInner = function (widget) {
 WidgetManager.prototype.renderWidget = function (widget, slideEl) {
     var self = this;
     var wrapper = document.createElement('div');
-    wrapper.className = 'slide-widget';
+    wrapper.className = 'slide-widget' + (widget.seeded ? ' widget-seeded-photo' : '');
     wrapper.id = 'widget-' + widget.id;
     wrapper.dataset.widgetId = widget.id;
 
@@ -3555,7 +3691,14 @@ WidgetManager.prototype.load = function () {
     } catch (e) {
         raw = null;
     }
-    if (!raw) return;
+    // Nothing saved yet for this deck - either it's brand new, or this browser
+    // never touched it. Seed the auto-detected photo placeholders (from the
+    // sermon's "insert photo of..." note cues) so they're visible on first
+    // load, then bail: there's no saved widget JSON to replay.
+    if (!raw) {
+        this.seedInitialPhotoWidgets();
+        return;
+    }
     var data;
     try {
         data = JSON.parse(raw);
@@ -3578,6 +3721,49 @@ WidgetManager.prototype.load = function () {
             self.renderWidget(widget, slideEl);
         });
     });
+};
+
+// window.__INITIAL_PHOTO_WIDGETS__ is set server-side (see generatePresentationHtml
+// in slideTemplates.ts) from photo cue lines found in the sermon's raw notes
+// ("insert photo of the empty tomb", "[Slide: baptism photo]", "pic of the altar",
+// etc. - see extractSlidePhotoCues in sermonParser.ts). Only runs on a deck's very
+// first load, before any widget edit of the user's own has been saved, so a
+// placeholder the user deletes never comes back on a later visit.
+WidgetManager.prototype.seedInitialPhotoWidgets = function () {
+    var seeds = window.__INITIAL_PHOTO_WIDGETS__;
+    if (!seeds) return;
+    var self = this;
+    // Fills most of the 1920x1080 stage (a wide margin, not widgetDefaults()'s
+    // small 480x240 manual-add size) since a seeded placeholder usually stands
+    // in for the slide's entire image, not a small inset. Several cues on one
+    // slide tile side by side across that same area instead of stacking on
+    // top of each other.
+    var MARGIN_X = 160, MARGIN_Y = 90, GAP = 40;
+    var maxW = 1920 - MARGIN_X * 2;
+    var maxH = 1080 - MARGIN_Y * 2;
+    Object.keys(seeds).forEach(function (slideId) {
+        var slideEl = document.querySelector('#deckStage .slide[data-slide-id="' + slideId + '"]');
+        if (!slideEl) return;
+        var list = self.widgetsBySlide[slideId] || (self.widgetsBySlide[slideId] = []);
+        var cues = seeds[slideId];
+        var n = cues.length;
+        var boxW = Math.floor((maxW - GAP * (n - 1)) / n);
+        var boxH = maxH;
+        cues.forEach(function (seed, i) {
+            var widget = widgetDefaults('photo');
+            widget.caption = seed.caption;
+            widget.id = 'w' + (self.nextId++);
+            widget.type = 'photo';
+            widget.seeded = true;
+            widget.width = boxW;
+            widget.height = boxH;
+            widget.x = MARGIN_X + i * (boxW + GAP);
+            widget.y = MARGIN_Y;
+            list.push(widget);
+            self.renderWidget(widget, slideEl);
+        });
+    });
+    this.save();
 };
 
 WidgetManager.prototype.fieldGroup = function (labelText) {
@@ -3866,6 +4052,10 @@ WidgetManager.prototype.buildPhotoFields = function (body, widget) {
         self.save();
         self.openConfigPanel(widget);
     }, widget, 'image/*');
+    this.textField(body, 'Caption (shown while empty)', widget.caption || '', function (v) {
+        widget.caption = v;
+        self.refreshInner(widget);
+    }, false, widget);
 
     this.sectionTitle(body, 'Fit & Ratio');
     this.selectField(body, 'Fit', widget.fit, [
@@ -4542,12 +4732,24 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
   const slideTexts = parseSermonNotes(rawNotes);
   const totalSlides = slideTexts.length;
 
+  // Photo cue lines ("insert photo of the cross", "[Slide: baptism photo]", "pic
+  // of the altar", ...) are stage directions, not sermon text - extractSlidePhotoCues
+  // strips them out of what gets rendered as the slide's title/body and returns
+  // their captions instead, keyed by slide id, for seeding starter photo-placeholder
+  // widgets client-side (see WidgetManager.seedInitialPhotoWidgets in WIDGET_SYSTEM_JS).
+  const initialPhotoWidgets: Record<string, { caption: string }[]> = {};
+
   const slidesHtml = slideTexts.map((text, idx) => {
     const isTitle = idx === 0;
+    const slideId = `slide-${idx}`;
+    const { cleanedText, cues } = extractSlidePhotoCues(text);
+    if (cues.length > 0) {
+      initialPhotoWidgets[slideId] = cues;
+    }
     const slideClass = isTitle ? 'slide title-slide active visible' : 'slide';
-    const innerContent = theme.renderSlide(text, isTitle, idx, totalSlides);
+    const innerContent = stripEmptySlideTitle(theme.renderSlide(cleanedText, isTitle, idx, totalSlides));
     return `
-      <section class="${slideClass}" data-index="${idx}" data-slide-id="slide-${idx}">
+      <section class="${slideClass}" data-index="${idx}" data-slide-id="${slideId}">
         ${innerContent}
       </section>
     `;
@@ -4657,7 +4859,20 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
         </main>
     </div>
 
+    <script id="initialPhotoWidgetsSeed">
+        window.__INITIAL_PHOTO_WIDGETS__ = ${JSON.stringify(initialPhotoWidgets).replace(/<\//g, '<\\/')};
+    </script>
     <script>
+        // Storage-hosted decks load through /api/proxy-html?url=<storage-url>, so
+        // window.location.pathname alone ('/api/proxy-html') is identical for every
+        // deck in this app - keying localStorage on pathname only would collide
+        // slide edits, widgets, and structure across completely different sermons
+        // viewed in the same browser. .search carries the distinguishing 'url='
+        // param, so folding it into the key gives each deck its own namespace.
+        function deckStorageKey(prefix) {
+            return prefix + window.location.pathname + window.location.search;
+        }
+        ${SLIDE_FIT_TEXT_JS}
         // State Realtime Sync interface
         // If we are embedded in SermonPresenter, we communicate current index with parent window
         function syncSlideWithParent(index) {
@@ -4716,7 +4931,18 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
         // reloaded, edited deck doesn't silently start rendering in quirks mode.
         function buildSaveableHtml() {
             var clone = document.documentElement.cloneNode(true);
-            var stale = clone.querySelectorAll('#slideFilmstrip, .floating-toolbar, .text-move-handle, .text-resize-handle, .smart-guides, .context-menu');
+            // #initialPhotoWidgetsSeed's one job is seeding placeholder widgets into
+            // widgetsBySlide + the DOM the very first time this deck is ever opened
+            // (WidgetManager.load() only runs it when THIS browser's localStorage has
+            // no saved widget state yet - see seedInitialPhotoWidgets). By the time a
+            // save happens, that seeding has already either happened (the widgets it
+            // would create now already exist as real elements below, cloned into this
+            // same snapshot) or been superseded by the user's own edits. Left in, the
+            // saved HTML carries it forward forever: the next browser/session with no
+            // localStorage for this deck (a different device, a cleared cache, an
+            // incognito tab) would run it again and seed a second, duplicate set of
+            // placeholders directly on top of the ones already baked into the markup.
+            var stale = clone.querySelectorAll('#initialPhotoWidgetsSeed, #slideFilmstrip, .floating-toolbar, .text-move-handle, .text-resize-handle, .smart-guides, .context-menu');
             for (var i = 0; i < stale.length; i++) {
                 stale[i].parentNode.removeChild(stale[i]);
             }
@@ -4839,6 +5065,10 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 this.setupTouchNav();
                 this.setupMouseWheel();
                 this.showSlide(0);
+                // Re-fit once web fonts are actually loaded: the initial showSlide(0)
+                // above may have measured against fallback-font metrics, which can
+                // over- or under-estimate how much a slide needs to shrink.
+                runFitWhenReady(fitAllSlides);
             }
 
             setupStageScale() {
@@ -4976,6 +5206,11 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                     slide.classList.toggle('active', isActive);
                     slide.classList.toggle('visible', isActive);
                 });
+                // Synchronous (not wrapped in runFitWhenReady's promise) so the fit is
+                // already applied by the time this call returns - export (exportPptx.ts)
+                // drives showSlide() then immediately rasterizes the slide, and by then
+                // fonts are already loaded (it awaits document.fonts.ready beforehand).
+                fitSlideText(this.slides[this.currentSlide]);
                 syncSlideWithParent(this.currentSlide);
                 if (window.thumbnailManager) window.thumbnailManager.updateActive(this.currentSlide);
             }
@@ -5032,16 +5267,48 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
             var slide = el.closest('.slide');
             var slideRect = slide.getBoundingClientRect();
             var scale = window.widgetManager.getStageScale();
+
+            // .slide-content-wrapper is a flex column centering its children -
+            // once el leaves it below, the wrapper would recenter whichever of
+            // title/body is left behind alone in the box (that recenter is the
+            // "moving the body snaps the title to the middle" bug). So the
+            // still-in-flow sibling must be measured here too, before either one
+            // is reparented out, and promoted alongside el.
+            var siblingField = field === 'title' ? 'body' : 'title';
+            var siblingEl = slide.querySelector(field === 'title' ? '.slide-body' : '.slide-title');
+            var siblingStyle = siblingEl ? window.editorController.getTextStyle(slideId, siblingField) : null;
+            var siblingNeedsPromotion = !!(siblingStyle && siblingStyle.x === null);
+
             var rect = el.getBoundingClientRect();
+            var siblingRect = siblingNeedsPromotion ? siblingEl.getBoundingClientRect() : null;
+
             style.x = (rect.left - slideRect.left) / scale;
             style.y = (rect.top - slideRect.top) / scale;
             style.width = rect.width / scale;
             style.height = rect.height / scale;
+
+            if (siblingNeedsPromotion) {
+                siblingStyle.x = (siblingRect.left - slideRect.left) / scale;
+                siblingStyle.y = (siblingRect.top - slideRect.top) / scale;
+                siblingStyle.width = siblingRect.width / scale;
+                siblingStyle.height = siblingRect.height / scale;
+            }
+
             // Must happen before applyTextStyles() sets position:absolute - and
             // synchronously, with no paint in between, so there's no visible flash
-            // of the element rendering (even briefly) at the wrong position under
-            // its new parent before left/top/width/height get applied.
+            // of either element rendering (even briefly) at the wrong position
+            // under its new parent, or the wrapper recentering whichever one is
+            // appended second around the one already removed - before
+            // left/top/width/height get applied to both.
             slide.appendChild(el);
+            if (siblingNeedsPromotion) {
+                slide.appendChild(siblingEl);
+                // Not persistTextEdit()'d here - the caller's own persistTextEdit
+                // for field, fired at the end of this same drag/resize gesture,
+                // saves the full current HTML (buildSaveableHtml), which already
+                // reflects this inline style change applied to the live DOM.
+                window.editorController.applyTextStyles(siblingEl, siblingStyle);
+            }
             return style;
         }
 
@@ -5109,7 +5376,11 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                         style.x = parseFloat(el.style.left) || 0;
                         style.y = parseFloat(el.style.top) || 0;
                         style.width = parseFloat(el.style.width) || 0;
-                        style.height = parseFloat(el.style.height) || 0;
+                        // el.style.height is 'auto' (see applyTextStyles) - the stored
+                        // size lives in min-height instead. Fall back to el.style.height
+                        // for decks saved before this change, which baked a literal px
+                        // height with no min-height.
+                        style.height = parseFloat(el.style.minHeight) || parseFloat(el.style.height) || 0;
                     }
                 });
             }
@@ -5133,6 +5404,16 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 if (!el || !style) return;
                 el.style.fontFamily = style.fontFamily || '';
                 el.style.fontSize = style.fontSize ? (typeof style.fontSize === 'number' ? style.fontSize + 'px' : style.fontSize) : '';
+                // fitSlideText() treats dataset.baseFontSize as the 100%-scale size to
+                // fit down from, and only ever populates it lazily on first run - so an
+                // explicit size from here (the font-size toolbar control) must update it
+                // too, or the next fit pass (e.g. every slide switch, see showSlide())
+                // would silently revert to whatever was cached before this change.
+                if (typeof style.fontSize === 'number') {
+                    el.dataset.baseFontSize = style.fontSize;
+                } else {
+                    delete el.dataset.baseFontSize;
+                }
                 el.style.color = style.color || '';
                 el.style.textAlign = style.align || '';
                 // Explicit fontWeight wins if set; otherwise the bold toggle switches
@@ -5157,12 +5438,21 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 // position:absolute and renders pixel-identical to before this existed.
                 // max-width is cleared alongside it since most themes cap .slide-body's
                 // width, which would otherwise silently defeat a widen-past-default resize.
+                //
+                // Height is intentionally NOT pinned to style.height here - only width
+                // is locked. style.height (set by promoteToFreeform's initial measurement
+                // and by dragging the resize handle) is instead applied as min-height, so
+                // the box never renders shorter than what the user explicitly sized, but
+                // grows automatically (ordinary content-driven height:auto) as typed text
+                // wraps or new lines are added, instead of clipping/overflowing past a
+                // fixed height.
                 if (style.x !== null && style.y !== null && style.width !== null && style.height !== null) {
                     el.style.position = 'absolute';
                     el.style.left = style.x + 'px';
                     el.style.top = style.y + 'px';
                     el.style.width = style.width + 'px';
-                    el.style.height = style.height + 'px';
+                    el.style.height = 'auto';
+                    el.style.minHeight = style.height + 'px';
                     el.style.maxWidth = 'none';
                 } else {
                     el.style.position = '';
@@ -5170,6 +5460,7 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                     el.style.top = '';
                     el.style.width = '';
                     el.style.height = '';
+                    el.style.minHeight = '';
                     el.style.maxWidth = '';
                 }
             }
@@ -5364,6 +5655,10 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                     const startY = e.clientY;
                     const startSX = style.x;
                     const startSY = style.y;
+                    // style.height is only a min-height now (see applyTextStyles) - the
+                    // box may actually render taller once content grows it, so clamp
+                    // against the live rendered height rather than the stale stored one.
+                    const liveHeight = el.getBoundingClientRect().height / window.widgetManager.getStageScale();
                     handles.moveHandle.setPointerCapture(e.pointerId);
 
                     const onMove = (ev) => {
@@ -5372,7 +5667,7 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                         const dx = (ev.clientX - startX) / scale;
                         const dy = (ev.clientY - startY) / scale;
                         style.x = Math.max(0, Math.min(1920 - style.width, startSX + dx));
-                        style.y = Math.max(0, Math.min(1080 - style.height, startSY + dy));
+                        style.y = Math.max(0, Math.min(1080 - liveHeight, startSY + dy));
                         const snapped = window.smartGuides.check({ x: style.x, y: style.y, width: style.width, height: style.height }, scale);
                         style.x = snapped.x;
                         style.y = snapped.y;
@@ -5512,9 +5807,16 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 // history/save on blur below - debounced per-slide inside
                 // ThumbnailManager.refresh so rapid keystrokes don't re-render.
                 el.addEventListener('input', () => {
-                    if (!this.isActive || !window.thumbnailManager) return;
-                    const slide = el.closest('.slide');
-                    window.thumbnailManager.refresh(slide.getAttribute('data-slide-id'));
+                    if (!this.isActive) return;
+                    // The box's height is auto (see applyTextStyles) and grows with
+                    // content as the user types/wraps new lines - keep the move/resize
+                    // handles tracking its live bottom edge instead of staying pinned
+                    // to wherever the box was when it was last focused.
+                    this.positionTextHandles(el, handles);
+                    if (window.thumbnailManager) {
+                        const slide = el.closest('.slide');
+                        window.thumbnailManager.refresh(slide.getAttribute('data-slide-id'));
+                    }
                 });
                 // Deliberately does NOT touch floatingToolbar here - deciding
                 // "should the format toolbar actually close" from a blur event is
@@ -5536,6 +5838,10 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                     window.historyManager.commit({ after: text });
                     this.persistTextEdit(slideId, field, text, this.textStyles[slideId] && this.textStyles[slideId][field]);
                     this.hideTextHandles(handles);
+                    // Edited text may now be longer/shorter than what it was fitted to.
+                    // fitSlideText always resets to the recorded base size before
+                    // re-measuring, so this correctly handles both directions.
+                    fitSlideText(slide);
                 });
             }
 
@@ -5568,6 +5874,10 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 }
                 if (titleEl) this.registerElement(titleEl);
                 if (bodyEl) this.registerElement(bodyEl);
+                // cloneNode(true) copies the source slide's already-fitted inline
+                // font-size and data-base-font-size, which is correct as a starting
+                // point since the clone starts with identical text.
+                fitSlideText(newEl);
             }
 
             toggleEditMode() {
@@ -5596,7 +5906,7 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
             // sites) - when provided it's persisted alongside the text so a reload
             // restores both content and per-element style overrides.
             persistTextEdit(slideId, field, text, style) {
-                const storageKey = 'sermon_edit_' + window.location.pathname;
+                const storageKey = deckStorageKey('sermon_edit_');
                 let edits = {};
                 try { edits = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (e) {}
                 if (!edits[slideId]) edits[slideId] = {};
@@ -5629,7 +5939,7 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
             }
 
             loadStoredEdits() {
-                const storageKey = 'sermon_edit_' + window.location.pathname;
+                const storageKey = deckStorageKey('sermon_edit_');
                 let edits = null;
                 try { edits = JSON.parse(localStorage.getItem(storageKey) || 'null'); } catch (e) {}
                 if (!edits) return;

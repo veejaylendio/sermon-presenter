@@ -645,7 +645,10 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
               max={300}
               defaultValue={textFocus?.fields.fontSize ?? ''}
               onFocus={sendFormatBegin}
-              onChange={(e) => sendFormatLive('fontSize', e.target.value)}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value)
+                if (!Number.isNaN(v)) sendFormatLive('fontSize', v)
+              }}
               onBlur={sendFormatEnd}
               title="Font size (px)"
             />
