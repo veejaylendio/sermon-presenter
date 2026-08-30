@@ -248,8 +248,9 @@ a {
 }
 
 
-/* Presenter Control Dock UI - shown when presenting in-place (same window,
-   same monitor) instead of via the separate output/controller popups. */
+/* Presenter Control Dock UI - shown in the Presentation output window
+   (PresentationOutputClient) whenever it isn't paired with a separate
+   Controller popup, which drives navigation instead when one is open. */
 .presenter-dock {
   position: absolute;
   bottom: 1.5rem;
@@ -346,6 +347,22 @@ a {
   background: #4f46e5;
   border-color: #4f46e5;
   color: #ffffff;
+}
+
+/* One-time "Start Presenting (Fullscreen)" affordance shown in the
+   Presentation output window until the presenter's own click inside it
+   triggers requestFullscreen() - browsers only allow fullscreen in direct
+   response to a real gesture inside that same window, so this can't be
+   skipped even though the window was just opened by a gesture in the editor. */
+.presenter-start-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1000;
+  height: 48px;
+  padding: 0 1.5rem;
+  font-size: 1rem;
 }
 
 /* Editor Toolbar Row (Edit Mode) — the single consolidated top bar: it

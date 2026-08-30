@@ -5666,7 +5666,17 @@ export const EDITOR_RUNTIME_JS = `
 
             setupKeyboardTrigger() {
                 document.addEventListener('keydown', (e) => {
-                    if ((e.key === 'e' || e.key === 'E') && !e.target.getAttribute('contenteditable')) {
+                    // Gated on mode-edit so this shortcut is inert wherever this deck
+                    // was loaded/updated with editorMode=present (e.g. the Presenter
+                    // Controller's iframes, or the Presentation output window) -
+                    // without this check, clicking into any such iframe and pressing
+                    // E made slide text directly typeable there, since toggleEditMode()
+                    // itself doesn't know or care which window called it.
+                    if (
+                        (e.key === 'e' || e.key === 'E') &&
+                        !e.target.getAttribute('contenteditable') &&
+                        document.body.classList.contains('mode-edit')
+                    ) {
                         e.preventDefault();
                         this.toggleEditMode();
                     }

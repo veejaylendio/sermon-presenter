@@ -15,7 +15,6 @@ interface Props {
   initialSlideCount: number
 }
 
-type Mode = 'edit' | 'present'
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
 // Structural toolbar button states, mirrored from the deck's own managers
@@ -141,26 +140,37 @@ function AlignIcon({ align }: { align: AlignValue }) {
 export default function PresentationViewerClient({ sermonId, sermonTitle, presentationId, presentationUrl, initialSlideCount }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const [mode, setMode] = useState<Mode>('edit')
-  const [currentSlideIndex, setCurrentSlideIndex] = useState(0)
-  // Seeded from the server-fetched slide count (see getPresentationContext) so
-  // the dock shows the right total immediately - the deck only pushes
-  // slide-count-changed on structural edits (add/delete slide), never on a
-  // plain initial load, so without this seed the dock would sit stuck at
-  // "X / 1" until the presenter happened to add or delete a slide.
+  // Seeded from the server-fetched slide count (see getPresentationContext),
+  // then kept current via slide-count-changed - not used for navigation here
+  // any more (this window never presents in place), only forwarded alongside
+  // deck-updated broadcasts so the separate Presentation window can size its
+  // own dock without re-deriving a count from the raw html itself.
   const [slideCount, setSlideCount] = useState(initialSlideCount)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [isLaunching, setIsLaunching] = useState(false)
-  // True while a separate presenter-controller popup is open - in that case
-  // this window IS the projected output (chrome-free, no dock: the presenter
-  // navigates from the controller instead).
-  const [hasController, setHasController] = useState(false)
   const [monitorPrompt, setMonitorPrompt] = useState<{
     screens: ScreenDetailed[]
     onConfirm: (screen: ScreenDetailed) => void
     onCancel: () => void
   } | null>(null)
-  const controllerChannelRef = useRef<BroadcastChannel | null>(null)
+  // Live-sync channel to the separate Presentation window (and, incidentally,
+  // the same channel the Controller uses for its own set-slide/close-presentation
+  // traffic - see openPresentationWindow/openControllerWindow below). This
+  // window only ever sends on it now; it never needs to react to messages on
+  // it itself, since presenting is fully decoupled from what's being edited
+  // here - see broadcastLive.
+  const liveChannelRef = useRef<BroadcastChannel | null>(null)
+  useEffect(() => {
+    const channel = new BroadcastChannel(`sermon-presenter:${presentationId}`)
+    liveChannelRef.current = channel
+    return () => {
+      channel.close()
+      liveChannelRef.current = null
+    }
+  }, [presentationId])
+  const broadcastLive = useCallback((message: unknown) => {
+    liveChannelRef.current?.postMessage(message)
+  }, [])
   // Wraps the whole title-bar toolbar (structural buttons + format controls +
   // save/present) - used to tell a genuine "click/Esc outside" apart from the
   // user simply interacting with one of these now-external controls (see the
@@ -207,45 +217,56 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
   // Structural toolbar buttons (edit toggle, add widget, add/delete slide,
   // undo/redo) - each just synthesizes a click on the deck's own (now
   // invisible) button, reusing its existing handler/state logic untouched.
+  // Also broadcast so a live Presentation window relays the exact same
+  // command into its own iframe - see broadcastLive/liveChannelRef above and
+  // PresentationOutputClient's handling of these same sp-* message shapes.
   const sendCommand = useCallback((command: string) => {
-    postToDeck({ type: 'sp-command', command })
-  }, [postToDeck])
+    const message = { type: 'sp-command', command }
+    postToDeck(message)
+    broadcastLive(message)
+  }, [postToDeck, broadcastLive])
 
   // One-shot format field (font family, alignment) - applies immediately and
   // updates our local mirror so the control reflects it without waiting on a
   // round trip.
   const sendFormatSet = useCallback((key: string, value: unknown) => {
-    postToDeck({ type: 'sp-format-set', key, value })
+    const message = { type: 'sp-format-set', key, value }
+    postToDeck(message)
+    broadcastLive(message)
     setTextFocus((tf) => (tf ? { ...tf, fields: { ...tf.fields, [key]: value } } : tf))
-  }, [postToDeck])
+  }, [postToDeck, broadcastLive])
 
   const toggleFormat = useCallback((key: keyof TextFields) => {
     setTextFocus((tf) => {
       if (!tf) return tf
       const next = !tf.fields[key]
-      postToDeck({ type: 'sp-format-set', key, value: next })
+      const message = { type: 'sp-format-set', key, value: next }
+      postToDeck(message)
+      broadcastLive(message)
       return { ...tf, fields: { ...tf.fields, [key]: next } }
     })
-  }, [postToDeck])
+  }, [postToDeck, broadcastLive])
 
   // Continuous format fields (font size, color) - begin/live/end mirrors the
   // old raw <input>'s focus/input/blur sequence so only the final value gets
-  // pushed onto the undo stack, not every keystroke/drag step.
-  const sendFormatBegin = useCallback(() => postToDeck({ type: 'sp-format-begin' }), [postToDeck])
-  const sendFormatLive = useCallback((key: string, value: unknown) => postToDeck({ type: 'sp-format-live', key, value }), [postToDeck])
-  const sendFormatEnd = useCallback(() => postToDeck({ type: 'sp-format-end' }), [postToDeck])
-
-  const navigateSlide = useCallback((dir: 'next' | 'prev') => {
-    if (dir === 'next') {
-      const nextIdx = Math.min(slideCount - 1, currentSlideIndex + 1)
-      postToDeck({ action: 'next', type: 'set-slide', index: nextIdx })
-      setCurrentSlideIndex(nextIdx)
-    } else {
-      const prevIdx = Math.max(0, currentSlideIndex - 1)
-      postToDeck({ action: 'prev', type: 'set-slide', index: prevIdx })
-      setCurrentSlideIndex(prevIdx)
-    }
-  }, [slideCount, currentSlideIndex, postToDeck])
+  // pushed onto the undo stack, not every keystroke/drag step. Relayed live
+  // (not just on request-save's slower debounce) so dragging/typing a value
+  // feels immediate in the Presentation window too.
+  const sendFormatBegin = useCallback(() => {
+    const message = { type: 'sp-format-begin' }
+    postToDeck(message)
+    broadcastLive(message)
+  }, [postToDeck, broadcastLive])
+  const sendFormatLive = useCallback((key: string, value: unknown) => {
+    const message = { type: 'sp-format-live', key, value }
+    postToDeck(message)
+    broadcastLive(message)
+  }, [postToDeck, broadcastLive])
+  const sendFormatEnd = useCallback(() => {
+    const message = { type: 'sp-format-end' }
+    postToDeck(message)
+    broadcastLive(message)
+  }, [postToDeck, broadcastLive])
 
   // Debounced, race-safe save: only one saveDeckHtml call is ever in flight. If a
   // new request-save arrives while one is running, its payload (always the latest
@@ -284,22 +305,6 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
     flushSave(html)
   }, [flushSave])
 
-  // Ends a controller-paired presentation: closes the BroadcastChannel and
-  // drops back to the chrome-free-output flag. Called both when the
-  // controller tells us to close, and as cleanup when returning to Edit Mode
-  // any other way (Esc, etc).
-  const teardownController = useCallback(() => {
-    controllerChannelRef.current?.close()
-    controllerChannelRef.current = null
-    setHasController(false)
-  }, [])
-
-  const returnToEdit = useCallback(() => {
-    setMode('edit')
-    postToDeck({ type: 'set-mode', mode: 'edit' })
-    teardownController()
-  }, [postToDeck, teardownController])
-
   // Closes the formatting toolbar and tells the deck to blur/deselect
   // whatever's currently being edited (commits the pending edit, removes the
   // contenteditable outline). The mirror case - Escape or a click while focus
@@ -322,35 +327,21 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [textFocus, closeFormatToolbar])
 
-  // Listen for iframe postMessages & window keyboard events
+  // Listen for iframe postMessages. This window never presents in place any
+  // more (see openPresentationWindow/openControllerWindow below), so it no
+  // longer needs to track slide-changed/currentSlideIndex or hijack
+  // arrow/space keys for navigation - editing and presenting are fully
+  // decoupled, and the deck's own request-save is also mirrored out to the
+  // separate Presentation window (broadcastLive) so it stays live-synced.
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Only hijack arrow/space navigation while actually presenting in-place
-      // - in Edit Mode these keys are likely being used inside a
-      // contentEditable field or a toolbar input.
-      if (mode !== 'present') return
-      if (e.key === 'ArrowRight' || e.key === ' ') {
-        navigateSlide('next')
-      } else if (e.key === 'ArrowLeft') {
-        navigateSlide('prev')
-      }
-    }
-
     const handleMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return
       if (!e.data || typeof e.data.type !== 'string') return
-      if (e.data.type === 'slide-changed' && typeof e.data.index === 'number') {
-        setCurrentSlideIndex(e.data.index)
-        // Forward to a paired controller (no-op if none is open -
-        // controllerChannelRef is null): the deck can advance on its own
-        // (e.g. keyboard/wheel/touch nav firing inside this fullscreened
-        // iframe), and without this the controller would never learn about
-        // it, since it only actively sends 'set-slide', it doesn't poll.
-        controllerChannelRef.current?.postMessage({ type: 'set-slide', index: e.data.index })
-      } else if (e.data.type === 'slide-count-changed' && typeof e.data.count === 'number') {
+      if (e.data.type === 'slide-count-changed' && typeof e.data.count === 'number') {
         setSlideCount(e.data.count)
       } else if (e.data.type === 'request-save' && typeof e.data.html === 'string') {
         requestSave(e.data.html)
+        broadcastLive({ type: 'deck-updated', html: e.data.html, slideCount })
       } else if (e.data.type === 'sp-editor-state') {
         setEditorState({
           isEditActive: !!e.data.isEditActive,
@@ -374,27 +365,9 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
       }
     }
 
-    window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('message', handleMessage)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('message', handleMessage)
-    }
-  }, [navigateSlide, mode, requestSave])
-
-  // Pressing Esc is intercepted by the browser itself to exit native
-  // fullscreen - there's no separate "Exit Fullscreen"/"Exit to Edit" button
-  // to wire up, we just listen for that exit (however it happens: Esc, the
-  // OS fullscreen shortcut, etc.) and fall back to Edit Mode automatically.
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement && mode === 'present') {
-        returnToEdit()
-      }
-    }
-    document.addEventListener('fullscreenchange', handleFullscreenChange)
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
-  }, [mode, returnToEdit])
+    return () => window.removeEventListener('message', handleMessage)
+  }, [requestSave, broadcastLive, slideCount])
 
   // Asks the deck to serialize + save immediately (bypassing its normal 1.5s
   // autosave debounce) and waits for the resulting html. Present must never
@@ -422,30 +395,29 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
     })
   }, [postToDeck])
 
-  // Presents in THIS window, fullscreened on the given screen. A popup is
-  // never allowed to fullscreen itself (Chrome blocks it outright, as an
-  // anti-spoofing measure), so the output is always the window/tab the
-  // presenter is already using - requestFullscreen({ screen }) is the
-  // Window Management API's own mechanism for sending that fullscreen to a
-  // *different* monitor than the one this window currently happens to be on.
-  // A null screen (single/unknown-monitor case) falls back to a plain
-  // same-screen fullscreen request.
-  const presentInPlace = (screen: ScreenDetailed | null) => {
-    setMode('present')
-    postToDeck({ type: 'set-mode', mode: 'present' })
-    const el = containerRef.current
-    if (!el) return
-    if (screen) {
-      el.requestFullscreen({ screen }).catch(() => {
-        el.requestFullscreen().catch(() => {})
-      })
-    } else {
-      el.requestFullscreen().catch(() => {})
+  // Opens (or refocuses, via the fixed window name) the separate Presentation
+  // output window on the given screen - it does its own fullscreening (see
+  // PresentationOutputClient; that logic used to run in this window, in
+  // presentInPlace, but this window must now stay in Edit Mode and never
+  // become the projected output itself). hasController tells that window
+  // whether to show its own prev/next dock or expect a paired controller to
+  // drive it instead - a plain query param avoids needing any handshake
+  // between the two windows before the first live-sync broadcast.
+  const openPresentationWindow = (screen: ScreenDetailed | null, hasController: boolean) => {
+    const url = `/sermons/${sermonId}/present${hasController ? '?controller=1' : ''}`
+    const presentWin = window.open(url, 'sermon-presenter-output', windowFeaturesForScreen(screen))
+    if (!presentWin) {
+      alert('Please allow popups for this site to show the presentation.')
+      return
     }
+    presentWin.focus()
   }
 
-  // Opens (or refocuses) the presenter-controller popup on the given screen,
-  // and wires up the BroadcastChannel it uses to drive this window's slides.
+  // Opens (or refocuses) the presenter-controller popup on the given screen.
+  // It talks to the Presentation window directly over the shared
+  // sermon-presenter:<id> BroadcastChannel (set-slide/close-presentation) -
+  // this window doesn't need to relay any of that any more, since it's no
+  // longer the presentation surface.
   const openControllerWindow = (controllerScreen: ScreenDetailed | null) => {
     const controllerWin = window.open(
       `/sermons/${sermonId}/controller`,
@@ -457,20 +429,6 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
       return
     }
     controllerWin.focus()
-
-    const channel = new BroadcastChannel(`sermon-presenter:${presentationId}`)
-    channel.onmessage = (e) => {
-      if (!e.data || typeof e.data.type !== 'string') return
-      if (e.data.type === 'set-slide' && typeof e.data.index === 'number') {
-        postToDeck({ action: 'set-slide', index: e.data.index })
-        setCurrentSlideIndex(e.data.index)
-      } else if (e.data.type === 'close-presentation') {
-        if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
-        returnToEdit()
-      }
-    }
-    controllerChannelRef.current = channel
-    setHasController(true)
   }
 
   const handlePresent = async () => {
@@ -516,19 +474,20 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
           screens,
           onConfirm: (outputScreen) => {
             setMonitorPrompt(null)
-            presentInPlace(outputScreen)
             // Presenting on the primary/default monitor means the presenter
             // and the audience are looking at the same screen - a separate
             // controller window would just be fighting the fullscreen output
             // for that same screen, so skip it entirely.
-            if (!outputScreen.isPrimary) {
+            const willHaveController = !outputScreen.isPrimary
+            openPresentationWindow(outputScreen, willHaveController)
+            if (willHaveController) {
               openControllerWindow(pickControllerScreen(screens, outputScreen))
             }
           },
           onCancel: () => setMonitorPrompt(null),
         })
       } else {
-        presentInPlace(null)
+        openPresentationWindow(null, false)
       }
     } finally {
       setIsLaunching(false)
@@ -549,8 +508,7 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
         background: '#000'
       }}
     >
-      {mode === 'edit' && (
-        <div className="editor-toolbar" ref={toolbarRef}>
+      <div className="editor-toolbar" ref={toolbarRef}>
           <Link href="/sermons" className="editor-toolbar-back">
             ← Sermons
           </Link>
@@ -745,8 +703,7 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
           >
             {isLaunching ? 'Launching…' : 'Present ▶'}
           </button>
-        </div>
-      )}
+      </div>
 
       {/* Deck Iframe */}
       <iframe
@@ -762,30 +719,6 @@ export default function PresentationViewerClient({ sermonId, sermonTitle, presen
           background: '#000'
         }}
       />
-
-      {mode === 'present' && !hasController && (
-        <div className="presenter-dock">
-          <button
-            onClick={() => navigateSlide('prev')}
-            disabled={currentSlideIndex === 0}
-            className="presenter-control-btn presenter-control-btn-secondary"
-          >
-            ← Prev
-          </button>
-
-          <span className="presenter-slide-counter">
-            Slide {currentSlideIndex + 1} / {slideCount || 1}
-          </span>
-
-          <button
-            onClick={() => navigateSlide('next')}
-            disabled={currentSlideIndex >= (slideCount ? slideCount - 1 : 0)}
-            className="presenter-control-btn presenter-control-btn-primary"
-          >
-            Next →
-          </button>
-        </div>
-      )}
 
       {monitorPrompt && (
         <MonitorSelectDialog
