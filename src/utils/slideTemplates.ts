@@ -311,7 +311,15 @@ const SLIDE_FIT_TEXT_JS = `
     if (!slideEl) return;
     var wrapper = slideEl.querySelector('.slide-content-wrapper');
     if (!wrapper) return;
-    var targets = slideEl.querySelectorAll('.slide-title, .slide-body');
+    // Elements the user has explicitly resized via the format toolbar
+    // (dataset.fontSizeLocked, set by applyTextStyles) opt out of this
+    // safety net entirely - it exists to protect theme-default sizes
+    // against unexpectedly long content, not to silently override a
+    // deliberate manual choice every time the box happens to overflow.
+    var targets = Array.prototype.filter.call(
+      slideEl.querySelectorAll('.slide-title, .slide-body'),
+      function (el) { return el.dataset.fontSizeLocked !== 'true'; }
+    );
     if (!targets.length) return;
     var MIN_SCALE = 0.5;
     var STEP = 0.05;
@@ -4727,142 +4735,17 @@ const TOOLBAR_ICONS = {
 };
 
 // Generates the final full interactive presentation HTML file content
-export function generatePresentationHtml(title: string, rawNotes: string, themeOrCustom: string | CustomThemeData): string {
-  const theme = resolveThemeConfig(themeOrCustom);
-  const slideTexts = parseSermonNotes(rawNotes);
-  const totalSlides = slideTexts.length;
-
-  // Photo cue lines ("insert photo of the cross", "[Slide: baptism photo]", "pic
-  // of the altar", ...) are stage directions, not sermon text - extractSlidePhotoCues
-  // strips them out of what gets rendered as the slide's title/body and returns
-  // their captions instead, keyed by slide id, for seeding starter photo-placeholder
-  // widgets client-side (see WidgetManager.seedInitialPhotoWidgets in WIDGET_SYSTEM_JS).
-  const initialPhotoWidgets: Record<string, { caption: string }[]> = {};
-
-  const slidesHtml = slideTexts.map((text, idx) => {
-    const isTitle = idx === 0;
-    const slideId = `slide-${idx}`;
-    const { cleanedText, cues } = extractSlidePhotoCues(text);
-    if (cues.length > 0) {
-      initialPhotoWidgets[slideId] = cues;
-    }
-    const slideClass = isTitle ? 'slide title-slide active visible' : 'slide';
-    const innerContent = stripEmptySlideTitle(theme.renderSlide(cleanedText, isTitle, idx, totalSlides));
-    return `
-      <section class="${slideClass}" data-index="${idx}" data-slide-id="${slideId}">
-        ${innerContent}
-      </section>
-    `;
-  }).join('\n');
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${title}</title>
-    
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    ${theme.fontsLink}
-    
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        /* Base Viewport Styles */
-        ${VIEWPORT_BASE_CSS}
-
-        /* Base slide layout fallbacks (padding/sizing/centering safety net) */
-        ${BASE_SLIDE_CSS}
-
-        /* Custom Theme Styles */
-        ${theme.css}
-
-        /* Edit Mode Styles */
-        .edit-hotzone {
-            position: fixed; 
-            top: 0; 
-            left: 0;
-            width: 80px; 
-            height: 80px;
-            z-index: 10000;
-            cursor: pointer;
-        }
-        .edit-toggle {
-            position: fixed;
-            top: 20px;
-            left: var(--dock-offset);
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            background: #ffffff;
-            border: 1px solid rgba(0,0,0,0.1);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            font-size: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.3s ease, transform 0.2s ease;
-            z-index: 10001;
-        }
-        .edit-toggle.show,
-        .edit-toggle.active {
-            opacity: 1;
-            pointer-events: auto;
-        }
-        .edit-toggle.active {
-            background: var(--primary, #6366f1);
-            color: #fff;
-            transform: scale(1.1);
-        }
-        [contenteditable="true"] {
-            outline: 2px dashed var(--primary, #6366f1) !important;
-            padding: 4px;
-            border-radius: 4px;
-            background: rgba(99, 102, 241, 0.05);
-        }
-
-        /* Widget System Styles */
-        ${WIDGET_SYSTEM_CSS}
-
-        /* Filmstrip (Edit Mode slide navigator) */
-        ${FILMSTRIP_CSS}
-
-        /* Right-click context menu */
-        ${CONTEXT_MENU_CSS}
-
-        /* Title/body free-position drag/resize handles */
-        ${TEXT_HANDLES_CSS}
-
-        /* Smart Guides (alignment/snapping overlay) */
-        ${SMART_GUIDES_CSS}
-    </style>
-</head>
-<body>
-    <div class="edit-hotzone"></div>
-    <button class="edit-toggle" id="editToggle" title="Edit mode (E)">✏️</button>
-    <button class="add-widget-toggle" id="addWidgetToggle" title="Add widget">+</button>
-    <button class="toolbar-btn" id="addSlideToggle" title="Add slide">${TOOLBAR_ICONS.addSlide}</button>
-    <button class="toolbar-btn" id="deleteSlideToggle" title="Delete slide">${TOOLBAR_ICONS.deleteSlide}</button>
-    <button class="toolbar-btn" id="undoToggle" title="Undo (Ctrl+Z)">${TOOLBAR_ICONS.undo}</button>
-    <button class="toolbar-btn" id="redoToggle" title="Redo (Ctrl+Shift+Z)">${TOOLBAR_ICONS.redo}</button>
-    <div class="widget-popover" id="widgetPopover"></div>
-    <aside class="widget-config-panel" id="widgetConfigPanel"></aside>
-
-    <div class="deck-viewport">
-        <main class="deck-stage" id="deckStage">
-            ${slidesHtml}
-        </main>
-    </div>
-
-    <script id="initialPhotoWidgetsSeed">
-        window.__INITIAL_PHOTO_WIDGETS__ = ${JSON.stringify(initialPhotoWidgets).replace(/<\//g, '<\\/')};
-    </script>
-    <script>
+// Generation-independent editor runtime: helper managers, InlineEditor,
+// WidgetManager, ThumbnailManager, FloatingToolbar, ContextMenu, SmartGuides,
+// and the postMessage/save/bootstrap wiring - identical for every deck
+// regardless of title/theme/content (see generatePresentationHtml below, the
+// only producer). Exported so /api/proxy-html can re-splice a fresh copy of
+// this into an already-saved deck's HTML on every edit-mode load - without
+// that, a deck saved under an older version of this file would stay frozen
+// at whatever ran the last time it was saved, forever, since saving just
+// re-persists the live document's own (already-loaded, possibly stale)
+// script verbatim (see buildSaveableHtml below).
+export const EDITOR_RUNTIME_JS = `
         // Storage-hosted decks load through /api/proxy-html?url=<storage-url>, so
         // window.location.pathname alone ('/api/proxy-html') is identical for every
         // deck in this app - keying localStorage on pathname only would collide
@@ -5409,10 +5292,17 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                 // explicit size from here (the font-size toolbar control) must update it
                 // too, or the next fit pass (e.g. every slide switch, see showSlide())
                 // would silently revert to whatever was cached before this change.
+                // fontSizeLocked additionally opts this element OUT of fitSlideText's
+                // auto-shrink entirely once the user has picked a size by hand - without
+                // it, a manual increase that overflows the box would get silently shrunk
+                // back down (looking like the change was reverted) the very next time
+                // fitSlideText runs, e.g. on blur or slide switch.
                 if (typeof style.fontSize === 'number') {
                     el.dataset.baseFontSize = style.fontSize;
+                    el.dataset.fontSizeLocked = 'true';
                 } else {
                     delete el.dataset.baseFontSize;
+                    delete el.dataset.fontSizeLocked;
                 }
                 el.style.color = style.color || '';
                 el.style.textAlign = style.align || '';
@@ -5462,6 +5352,18 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
                     el.style.height = '';
                     el.style.minHeight = '';
                     el.style.maxWidth = '';
+                }
+
+                // Single choke point for every title/body visual change (toolbar
+                // font-size/family/color/bold/italic/underline/strikethrough/
+                // uppercase/align, plus drag-move and drag-resize) - refreshing the
+                // thumbnail here instead of at each call site guarantees the sidebar
+                // preview can't silently drift out of sync with a style path that
+                // forgets to refresh it. refresh() is already debounced per-slide, so
+                // firing on every pointermove during a drag is harmless.
+                if (window.thumbnailManager) {
+                    const slide = el.closest('.slide');
+                    if (slide) window.thumbnailManager.refresh(slide.getAttribute('data-slide-id'));
                 }
             }
 
@@ -6067,6 +5969,145 @@ export function generatePresentationHtml(title: string, rawNotes: string, themeO
             applyMode(mode);
             postEditorState();
         })();
+`;
+
+export function generatePresentationHtml(title: string, rawNotes: string, themeOrCustom: string | CustomThemeData): string {
+  const theme = resolveThemeConfig(themeOrCustom);
+  const slideTexts = parseSermonNotes(rawNotes);
+  const totalSlides = slideTexts.length;
+
+  // Photo cue lines ("insert photo of the cross", "[Slide: baptism photo]", "pic
+  // of the altar", ...) are stage directions, not sermon text - extractSlidePhotoCues
+  // strips them out of what gets rendered as the slide's title/body and returns
+  // their captions instead, keyed by slide id, for seeding starter photo-placeholder
+  // widgets client-side (see WidgetManager.seedInitialPhotoWidgets in WIDGET_SYSTEM_JS).
+  const initialPhotoWidgets: Record<string, { caption: string }[]> = {};
+
+  const slidesHtml = slideTexts.map((text, idx) => {
+    const isTitle = idx === 0;
+    const slideId = `slide-${idx}`;
+    const { cleanedText, cues } = extractSlidePhotoCues(text);
+    if (cues.length > 0) {
+      initialPhotoWidgets[slideId] = cues;
+    }
+    const slideClass = isTitle ? 'slide title-slide active visible' : 'slide';
+    const innerContent = stripEmptySlideTitle(theme.renderSlide(cleanedText, isTitle, idx, totalSlides));
+    return `
+      <section class="${slideClass}" data-index="${idx}" data-slide-id="${slideId}">
+        ${innerContent}
+      </section>
+    `;
+  }).join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${title}</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    ${theme.fontsLink}
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        /* Base Viewport Styles */
+        ${VIEWPORT_BASE_CSS}
+
+        /* Base slide layout fallbacks (padding/sizing/centering safety net) */
+        ${BASE_SLIDE_CSS}
+
+        /* Custom Theme Styles */
+        ${theme.css}
+
+        /* Edit Mode Styles */
+        .edit-hotzone {
+            position: fixed; 
+            top: 0; 
+            left: 0;
+            width: 80px; 
+            height: 80px;
+            z-index: 10000;
+            cursor: pointer;
+        }
+        .edit-toggle {
+            position: fixed;
+            top: 20px;
+            left: var(--dock-offset);
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: #ffffff;
+            border: 1px solid rgba(0,0,0,0.1);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease, transform 0.2s ease;
+            z-index: 10001;
+        }
+        .edit-toggle.show,
+        .edit-toggle.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .edit-toggle.active {
+            background: var(--primary, #6366f1);
+            color: #fff;
+            transform: scale(1.1);
+        }
+        [contenteditable="true"] {
+            outline: 2px dashed var(--primary, #6366f1) !important;
+            padding: 4px;
+            border-radius: 4px;
+            background: rgba(99, 102, 241, 0.05);
+        }
+
+        /* Widget System Styles */
+        ${WIDGET_SYSTEM_CSS}
+
+        /* Filmstrip (Edit Mode slide navigator) */
+        ${FILMSTRIP_CSS}
+
+        /* Right-click context menu */
+        ${CONTEXT_MENU_CSS}
+
+        /* Title/body free-position drag/resize handles */
+        ${TEXT_HANDLES_CSS}
+
+        /* Smart Guides (alignment/snapping overlay) */
+        ${SMART_GUIDES_CSS}
+    </style>
+</head>
+<body>
+    <div class="edit-hotzone"></div>
+    <button class="edit-toggle" id="editToggle" title="Edit mode (E)">✏️</button>
+    <button class="add-widget-toggle" id="addWidgetToggle" title="Add widget">+</button>
+    <button class="toolbar-btn" id="addSlideToggle" title="Add slide">${TOOLBAR_ICONS.addSlide}</button>
+    <button class="toolbar-btn" id="deleteSlideToggle" title="Delete slide">${TOOLBAR_ICONS.deleteSlide}</button>
+    <button class="toolbar-btn" id="undoToggle" title="Undo (Ctrl+Z)">${TOOLBAR_ICONS.undo}</button>
+    <button class="toolbar-btn" id="redoToggle" title="Redo (Ctrl+Shift+Z)">${TOOLBAR_ICONS.redo}</button>
+    <div class="widget-popover" id="widgetPopover"></div>
+    <aside class="widget-config-panel" id="widgetConfigPanel"></aside>
+
+    <div class="deck-viewport">
+        <main class="deck-stage" id="deckStage">
+            ${slidesHtml}
+        </main>
+    </div>
+
+    <script id="initialPhotoWidgetsSeed">
+        window.__INITIAL_PHOTO_WIDGETS__ = ${JSON.stringify(initialPhotoWidgets).replace(/<\//g, '<\\/')};
+    </script>
+    <script>
+        ${EDITOR_RUNTIME_JS}
     </script>
 </body>
 </html>
