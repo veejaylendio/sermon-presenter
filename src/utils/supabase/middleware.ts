@@ -42,7 +42,10 @@ export async function updateSession(request: NextRequest) {
   
   const isRootPage = request.nextUrl.pathname === '/'
 
-  if (!user && !isAuthPage && !isSharePage && !isRootPage && !isPublicAsset) {
+  // Vercel Cron keepalive ping - unauthenticated, guarded by CRON_SECRET instead
+  const isKeepalive = request.nextUrl.pathname === '/api/keepalive'
+
+  if (!user && !isAuthPage && !isSharePage && !isRootPage && !isPublicAsset && !isKeepalive) {
     // Redirect unauthenticated user to login
     const url = request.nextUrl.clone()
     url.pathname = '/login'
